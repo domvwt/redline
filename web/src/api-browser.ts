@@ -117,8 +117,8 @@ export const subscribeEvents: SubscribeEvents = (handlers) => {
 const WELCOME_PATH = "welcome.md";
 const WELCOME = `# Welcome to redline
 
-This is the **web version** — everything you see lives in your browser
-(IndexedDB), nothing is uploaded anywhere.
+This is the **web version** — your documents and comments stay in your
+browser, on this device. Nothing is uploaded anywhere.
 
 ## The loop
 

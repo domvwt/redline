@@ -942,3 +942,11 @@ pre code,
 .rl-tree-li:hover .rl-tree-remove { opacity: 1; }
 .rl-tree-li.removable:hover .rl-badge { visibility: hidden; }
 .rl-tree-remove:hover { color: var(--accent); }
+.rl-tree-remove-confirm {
+  opacity: 1;
+  color: #fff;
+  background: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.rl-tree-li:hover .rl-tree-remove-confirm { opacity: 1; }

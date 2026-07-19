@@ -530,7 +530,6 @@ export function App() {
         onRemove={
           STATIC_MODE && api.deleteDoc
             ? (p) => {
-                if (!window.confirm(`Remove ${p} and its comments from this browser?`)) return;
                 if (pathRef.current === p) {
                   // removal discards the doc — a pending autosave must not
                   // race the delete and resurrect it

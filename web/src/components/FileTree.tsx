@@ -40,6 +40,9 @@ interface Props {
 export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove }: Props) {
   const tree = useMemo(() => buildTree(entries), [entries]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // two-step inline confirm for removal: first click arms, second removes,
+  // leaving the row disarms — no browser alert
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,7 +97,11 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove 
         );
       })}
       {node.files.map((entry) => (
-        <li key={entry.path} className={onRemove ? "rl-tree-li removable" : "rl-tree-li"}>
+        <li
+          key={entry.path}
+          className={onRemove ? "rl-tree-li removable" : "rl-tree-li"}
+          onMouseLeave={() => setConfirmingRemove(null)}
+        >
           <button
             className={entry.path === currentPath ? "rl-tree-item active" : "rl-tree-item"}
             style={{ paddingLeft: 10 + depth * 14 }}
@@ -104,15 +111,27 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove 
             <span className="rl-tree-name">{entry.name}</span>
             {entry.openComments > 0 && <span className="rl-badge">{entry.openComments}</span>}
           </button>
-          {onRemove && (
-            <button
-              className="rl-tree-remove"
-              title={`Remove ${entry.name} and its comments from this browser`}
-              onClick={() => onRemove(entry.path)}
-            >
-              ✕
-            </button>
-          )}
+          {onRemove &&
+            (confirmingRemove === entry.path ? (
+              <button
+                className="rl-tree-remove rl-tree-remove-confirm"
+                title="Click to remove — this also deletes its comments"
+                onClick={() => {
+                  setConfirmingRemove(null);
+                  onRemove(entry.path);
+                }}
+              >
+                remove?
+              </button>
+            ) : (
+              <button
+                className="rl-tree-remove"
+                title={`Remove ${entry.name} and its comments from this browser`}
+                onClick={() => setConfirmingRemove(entry.path)}
+              >
+                ✕
+              </button>
+            ))}
         </li>
       ))}
     </>

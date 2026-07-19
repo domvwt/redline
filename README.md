@@ -197,8 +197,8 @@ is quote-based with fuzzy matching, so comments survive edits around and even
 ## The web version (no install)
 
 [domvwt.github.io/redline](https://domvwt.github.io/redline/) is the same
-review UI with the daemon swapped out: documents, comments, and history live
-in your browser (IndexedDB — nothing is uploaded anywhere), and instead of a
+review UI with the daemon swapped out: documents, comments, and history stay
+in your browser, on your device — nothing is uploaded anywhere. Instead of a
 local agent editing files, you round-trip through any AI chat:
 
 1. Drop or paste a markdown document in, review it, leave comments.
