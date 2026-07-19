@@ -454,17 +454,6 @@ export function App() {
 
   const annotations = sidecar?.annotations ?? [];
 
-  // click-through order for anchored, still-actionable comments: document order
-  const stepList = annotations
-    .filter((a) => a.target && (a.status === "open" || a.status === "addressed"))
-    .sort((a, b) => a.target!.selector[1].start - b.target!.selector[1].start);
-  const stepTo = (dir: 1 | -1) => {
-    if (!stepList.length) return;
-    const idx = stepList.findIndex((a) => a.id === focusedId);
-    const next = idx === -1 ? (dir === 1 ? 0 : stepList.length - 1) : (idx + dir + stepList.length) % stepList.length;
-    focusComment(stepList[next].id);
-  };
-
   // focus mode can open ANY comment, ordered as a queue: everything needing
   // attention first (project notes, document notes, then anchored comments
   // by position), resolved history as a tail in the same scope order.
@@ -520,6 +509,45 @@ export function App() {
     if (focusMode && focusEntries.length === 0) setFocusMode(false);
   }, [focusMode, focusEntries.length]);
 
+  // review state + loop actions, shown in the header (and on the welcome
+  // screen when comments exist with no document open)
+  const reviewCluster = (
+    <>
+      {reviewEntries.length > 0 && (
+        <span
+          className="rl-review-pill"
+          title={`${reviewEntries.filter((e) => !e.isProject).length} in this document · ${
+            reviewEntries.filter((e) => e.isProject).length
+          } project-wide`}
+        >
+          {reviewEntries.length} to review
+        </span>
+      )}
+      {reviewEntries.length > 0 && !focusMode && (
+        <button
+          className="rl-focus-btn"
+          onClick={enterFocusMode}
+          title="Review the open comments one at a time (Esc exits)"
+        >
+          focus mode
+        </button>
+      )}
+      {STATIC_MODE && (
+        <Suspense fallback={null}>
+          <HandoffControls
+            currentPath={path}
+            readyCount={
+              [...annotations, ...projectAnnotations].filter(
+                (a) => a.status === "open" || a.status === "orphaned",
+              ).length
+            }
+            onNotice={showError}
+          />
+        </Suspense>
+      )}
+    </>
+  );
+
   return (
     <div className="rl-app">
       <FileTree
@@ -554,6 +582,7 @@ export function App() {
           <>
             <header className="rl-header">
               <span className="rl-path">{path}</span>
+              <div className="rl-header-review">{reviewCluster}</div>
               <div className="rl-header-right">
                 {changed && view === "editor" && (
                   <button
@@ -654,6 +683,7 @@ export function App() {
                 straight from your clipboard — it's saved into the docs folder and opened.
               </p>
             )}
+            {reviewEntries.length > 0 && <div className="rl-welcome-review">{reviewCluster}</div>}
           </div>
         )}
       </main>
@@ -759,41 +789,6 @@ export function App() {
       )}
 
       {error && <div className="rl-toast">{error}</div>}
-      {reviewEntries.length > 0 && (
-        <div className="rl-statusbar">
-          {path && stepList.length > 0 && (
-            <button className="rl-step" onClick={() => stepTo(-1)} title="Previous comment">
-              ‹
-            </button>
-          )}
-          <span
-            title={`${reviewEntries.filter((e) => !e.isProject).length} in this document · ${
-              reviewEntries.filter((e) => e.isProject).length
-            } project-wide`}
-          >
-            {reviewEntries.length} to review
-          </span>
-          {path && stepList.length > 0 && (
-            <button className="rl-step" onClick={() => stepTo(1)} title="Next comment">
-              ›
-            </button>
-          )}
-          {!focusMode && (
-            <button
-              className="rl-focus-btn"
-              onClick={enterFocusMode}
-              title="Review the open comments one at a time (Esc exits)"
-            >
-              focus mode
-            </button>
-          )}
-          {STATIC_MODE && (
-            <Suspense fallback={null}>
-              <HandoffControls currentPath={path} onNotice={showError} />
-            </Suspense>
-          )}
-        </div>
-      )}
     </div>
   );
 }

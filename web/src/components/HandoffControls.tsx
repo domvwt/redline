@@ -34,9 +34,13 @@ interface ApplyReport {
 
 export function HandoffControls({
   currentPath,
+  readyCount,
   onNotice,
 }: {
   currentPath: string | null;
+  /** open/orphaned comments in view (current doc + project) — drives the
+   *  "ready to hand off" nudge */
+  readyCount: number;
   onNotice: (message: string) => void;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -161,36 +165,26 @@ export function HandoffControls({
 
   return (
     <>
-      <button
-        className="rl-handoff-btn"
-        onClick={() => void copyHandoff()}
-        title="Copy the document and open comments as a prompt for any AI chat"
-      >
-        copy for AI
-      </button>
-      <button
-        className="rl-handoff-btn"
-        onClick={() => setModalOpen(true)}
-        title="Paste the assistant's reply to apply its revision and responses"
-      >
-        paste reply
-      </button>
-
-      {awaitingReply && !modalOpen && (
-        <div className="rl-flow-toast" role="status">
-          <span>waiting for your assistant's reply</span>
-          <button className="rl-flow-toast-action" onClick={() => setModalOpen(true)}>
+      {awaitingReply ? (
+        <span className="rl-handoff-chip">
+          <span className="rl-handoff-chip-label">waiting for reply</span>
+          <button
+            className="rl-handoff-btn"
+            onClick={() => setModalOpen(true)}
+            title="Paste the assistant's reply to apply its revision and responses"
+          >
             paste reply
           </button>
-          <button
-            className="rl-flow-toast-dismiss"
-            title="Dismiss — the buttons stay in the bar below"
-            onClick={() => setPending(false)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+        </span>
+      ) : readyCount > 0 ? (
+        <button
+          className="rl-handoff-btn"
+          onClick={() => void copyHandoff()}
+          title="Copy the document and open comments as a prompt for any AI chat"
+        >
+          copy for AI
+        </button>
+      ) : null}
 
       {modalOpen && (
         <>
@@ -234,6 +228,13 @@ export function HandoffControls({
                   </button>
                   <button className="rl-handoff-cancel" onClick={close}>
                     cancel
+                  </button>
+                  <button
+                    className="rl-handoff-cancel rl-handoff-recopy"
+                    title="Put the handoff prompt back on the clipboard"
+                    onClick={() => void copyHandoff()}
+                  >
+                    copy the prompt again
                   </button>
                 </div>
               </>

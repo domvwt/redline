@@ -537,20 +537,7 @@ body {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .rl-menu button:disabled { opacity: 0.4; cursor: default; }
-.rl-step {
-  border: 1px solid var(--border);
-  background: none;
-  border-radius: 5px;
-  width: 22px;
-  padding: 1px 0;
-  font-size: 13px;
-  line-height: 1.2;
-  color: var(--muted);
-  cursor: pointer;
-}
-.rl-step:hover { color: var(--accent); border-color: var(--accent); }
 .rl-focus-btn {
-  margin-left: auto;
   border: 1px solid var(--accent);
   background: none;
   color: var(--accent);
@@ -823,21 +810,6 @@ body {
   font-size: 13.5px;
   z-index: 60;
 }
-.rl-statusbar {
-  position: fixed;
-  bottom: 0;
-  left: 232px;
-  right: 316px;
-  padding: 6px 24px;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  color: var(--muted);
-  text-align: center;
-}
 code {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -869,7 +841,6 @@ pre code,
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  margin-left: 8px;
 }
 .rl-handoff-btn:hover { background: var(--accent); color: #fff; }
 .rl-handoff-panel { display: flex; flex-direction: column; gap: 12px; }
@@ -943,38 +914,40 @@ pre code,
 }
 .rl-tree-li:hover .rl-tree-remove-confirm { opacity: 1; }
 
-/* persistent flow toast: top-right of the document, hugging the sidebar */
-.rl-flow-toast {
-  position: fixed;
-  top: 52px;
-  right: 332px;
+
+/* ---------- header review cluster ---------- */
+.rl-header-review {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: #35322d;
-  color: #fff;
-  padding: 8px 10px 8px 14px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  box-shadow: 0 8px 24px rgba(35, 33, 29, 0.25);
-  z-index: 50;
+  gap: 8px;
+  margin: 0 12px;
+  flex-wrap: wrap;
 }
-.rl-flow-toast-action {
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  border-radius: 6px;
-  padding: 3px 12px;
+.rl-review-pill {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 13px;
+  padding: 2px 12px;
   font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+  white-space: nowrap;
 }
-.rl-flow-toast-dismiss {
-  border: none;
-  background: none;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 4px;
+.rl-handoff-chip { display: inline-flex; align-items: center; gap: 8px; }
+.rl-handoff-chip-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  white-space: nowrap;
 }
-.rl-flow-toast-dismiss:hover { color: #fff; }
+.rl-welcome-review {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.rl-handoff-recopy { margin-right: auto; order: -1; }
+@media (max-width: 1560px) {
+  .rl-handoff-chip-label { display: none; }
+}
+/* mid-handoff, pasting is the one next step — filled at rest */
+.rl-handoff-chip .rl-handoff-btn { background: var(--accent); color: #fff; }
