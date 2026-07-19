@@ -123,16 +123,18 @@ Beyond passage comments:
 
 ### Handing off to the agent
 
-In a Claude Code session, in the same directory:
+Tell your agent, working in the same directory, to address your review
+comments — it finds them through the MCP tools if you registered them, or by
+reading `.redline/comments/*.json` directly.
+
+With Claude Code and the bundled skill there's a shortcut:
 
 ```
 /redline-comments
 ```
 
-(the slash command the skill install above provides — or just say
-"address my review comments" in your own words; the skill matches either.
-Other agents: point them at the MCP tools, or tell them to read
-`.redline/comments/*.json` and address what's open.)
+(or just say "address my review comments" in your own words; the skill
+matches either.)
 
 The agent lists the comments (each one carries your note plus the exact
 quoted passage and surrounding context), reads the documents, makes the

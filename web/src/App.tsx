@@ -438,6 +438,17 @@ export function App() {
     const idx = focusEntries.findIndex((e) => e.annotation.id === focusedId);
     focusNavigate(idx === -1 ? 0 : idx);
   };
+  // clicking a sidebar card opens it in focus mode; resolved cards (not in
+  // the review queue) fall back to plain highlight-focus
+  const openCardInFocus = (id: string) => {
+    const idx = focusEntries.findIndex((e) => e.annotation.id === id);
+    if (idx === -1) {
+      focusComment(id);
+      return;
+    }
+    setFocusMode(true);
+    focusNavigate(idx);
+  };
 
   // an emptied review queue must actually EXIT focus mode — otherwise the
   // mode stays silently armed and the panel springs open, uninvited, the
@@ -563,7 +574,7 @@ export function App() {
         focusedId={focusedId}
         focusTick={focusTick}
         onAddNote={addNote}
-        onFocus={focusComment}
+        onFocus={openCardInFocus}
         onDelete={(id, isProject) => {
           const p = commentPath(isProject);
           if (p) void api.deleteComment(id, p).catch((e) => showError(String(e)));

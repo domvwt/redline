@@ -116,11 +116,14 @@ function Section({
   children: ReactNode;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
-  // focusing a comment (e.g. clicking its highlight) must reveal its card,
-  // even if the user had collapsed this section
+  // an EXPLICIT focus (clicking a highlight, stepping) must reveal its card,
+  // even if the user had collapsed this section. Keyed on focusTick alone:
+  // focusedId also changes when a comment is merely created, and creation
+  // must not yank the sidebar around.
   useEffect(() => {
     if (containsFocused) setOverride(true);
-  }, [containsFocused, focusTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTick]);
   const expanded = override ?? unresolved > 0;
   if (total === 0) return null;
   return (
@@ -235,7 +238,7 @@ function CommentCard({
     <div
       className={`rl-card rl-card-${annotation.status}${focused ? " focused" : ""}`}
       data-comment-id={annotation.id}
-      onClick={() => quote && actions.onFocus(annotation.id)}
+      onClick={() => actions.onFocus(annotation.id)}
     >
       {shortQuote && <blockquote>{shortQuote}</blockquote>}
       {annotation.status === "orphaned" && (
@@ -494,11 +497,13 @@ export function CommentSidebar({
       });
   };
 
-  // keep the focused card visible when focus comes from the document or
-  // stepper. Scoped to the sidebar: the editor's highlight spans carry the
-  // same data-comment-id, and a document-wide query finds those first.
-  // Delayed a beat: focusing may have just auto-expanded a collapsed
-  // section, and the card only exists after that re-render.
+  // scroll the focused card into view on EXPLICIT focus only (focusTick
+  // bumps when a highlight is clicked or the stepper moves) — never on mere
+  // focusedId changes, which also happen when a comment is created.
+  // Scoped to the sidebar: the editor's highlight spans carry the same
+  // data-comment-id, and a document-wide query finds those first. Delayed a
+  // beat: focusing may have just auto-expanded a collapsed section, and the
+  // card only exists after that re-render.
   const asideRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!focusedId) return;
@@ -508,7 +513,8 @@ export function CommentSidebar({
         ?.scrollIntoView({ block: "center", behavior: "smooth" });
     }, 80);
     return () => clearTimeout(t);
-  }, [focusedId, focusTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTick]);
   // unresolved first (open and unanchored alike); resolved dimmed at the bottom
   const byOpenFirst = (a: Annotation, b: Annotation) =>
     (a.status === "resolved" ? 1 : 0) - (b.status === "resolved" ? 1 : 0);
