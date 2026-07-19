@@ -509,43 +509,34 @@ export function App() {
     if (focusMode && focusEntries.length === 0) setFocusMode(false);
   }, [focusMode, focusEntries.length]);
 
-  // review state + loop actions, shown in the header (and on the welcome
-  // screen when comments exist with no document open)
-  const reviewCluster = (
-    <>
-      {reviewEntries.length > 0 && (
-        <span
-          className="rl-review-pill"
-          title={`${reviewEntries.filter((e) => !e.isProject).length} in this document · ${
-            reviewEntries.filter((e) => e.isProject).length
-          } project-wide`}
-        >
-          {reviewEntries.length} to review
-        </span>
-      )}
-      {reviewEntries.length > 0 && !focusMode && (
-        <button
-          className="rl-focus-btn"
-          onClick={enterFocusMode}
-          title="Review the open comments one at a time (Esc exits)"
-        >
-          focus mode
-        </button>
-      )}
-      {STATIC_MODE && (
-        <Suspense fallback={null}>
-          <HandoffControls
-            currentPath={path}
-            readyCount={
-              [...annotations, ...projectAnnotations].filter(
-                (a) => a.status === "open" || a.status === "orphaned",
-              ).length
-            }
-            onNotice={showError}
-          />
-        </Suspense>
-      )}
-    </>
+  // project-wide review state + loop actions: lives in the left (project)
+  // pane. Status is text, actions are buttons.
+  const toReview =
+    tree.reduce((n, e) => n + e.openComments, 0) +
+    projectAnnotations.filter((a) => a.status !== "resolved").length;
+  const agentReady =
+    tree.reduce((n, e) => n + e.agentReady, 0) +
+    projectAnnotations.filter((a) => a.status === "open" || a.status === "orphaned").length;
+  const reviewBlock = (
+    <div className="rl-tree-review">
+      {toReview > 0 && <span className="rl-review-count">{toReview} to review</span>}
+      <div className="rl-tree-review-actions">
+        {reviewEntries.length > 0 && !focusMode && (
+          <button
+            className="rl-focus-btn"
+            onClick={enterFocusMode}
+            title="Review the open comments one at a time (Esc exits)"
+          >
+            focus mode
+          </button>
+        )}
+        {STATIC_MODE && (
+          <Suspense fallback={null}>
+            <HandoffControls currentPath={path} readyCount={agentReady} onNotice={showError} />
+          </Suspense>
+        )}
+      </div>
+    </div>
   );
 
   return (
@@ -555,6 +546,7 @@ export function App() {
         currentPath={path}
         onOpen={(p) => void openFile(p)}
         onOpenResult={openSearchResult}
+        reviewBlock={reviewBlock}
         onRemove={
           STATIC_MODE && api.deleteDoc
             ? (p) => {
@@ -582,7 +574,6 @@ export function App() {
           <>
             <header className="rl-header">
               <span className="rl-path">{path}</span>
-              <div className="rl-header-review">{reviewCluster}</div>
               <div className="rl-header-right">
                 {changed && view === "editor" && (
                   <button
@@ -683,7 +674,6 @@ export function App() {
                 straight from your clipboard — it's saved into the docs folder and opened.
               </p>
             )}
-            {reviewEntries.length > 0 && <div className="rl-welcome-review">{reviewCluster}</div>}
           </div>
         )}
       </main>

@@ -68,7 +68,11 @@ export interface Sidecar {
 export interface TreeEntry {
   path: string; // relative to root, posix separators
   name: string;
+  /** anything not finally resolved — open/orphaned await the agent,
+   *  addressed await the author's verdict */
   openComments: number;
+  /** open/orphaned only: comments an agent pass (or handoff) would pick up */
+  agentReady: number;
 }
 
 export type ServerEvent =

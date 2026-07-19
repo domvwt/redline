@@ -35,9 +35,11 @@ interface Props {
   /** present only where removing a document makes sense (the browser store —
    *  the daemon tree mirrors the folder on disk) */
   onRemove?(path: string): void;
+  /** project-wide review state and loop actions, shown above the tree */
+  reviewBlock?: React.ReactNode;
 }
 
-export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove }: Props) {
+export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove, reviewBlock }: Props) {
   const tree = useMemo(() => buildTree(entries), [entries]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // two-step inline confirm for removal: first click arms, second removes,
@@ -148,6 +150,7 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove 
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => e.key === "Escape" && setQuery("")}
       />
+      {reviewBlock}
       {results !== null ? (
         <ul className="rl-results">
           {results.length === 0 && <p className="rl-muted rl-empty">No matches.</p>}

@@ -70,7 +70,7 @@ describe("doc + comments API", () => {
   it("lists markdown files with open-comment counts", async () => {
     await createComment("quick brown fox", "why a fox?");
     const { json } = await api("GET", "/api/tree");
-    expect(json).toEqual([{ path: "guide.md", name: "guide.md", openComments: 1 }]);
+    expect(json).toEqual([{ path: "guide.md", name: "guide.md", openComments: 1, agentReady: 1 }]);
   });
 
   it("rejects path traversal", async () => {

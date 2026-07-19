@@ -915,39 +915,36 @@ pre code,
 .rl-tree-li:hover .rl-tree-remove-confirm { opacity: 1; }
 
 
-/* ---------- header review cluster ---------- */
-.rl-header-review {
+.rl-handoff-recopy { margin-right: auto; order: -1; }
+
+/* ---------- project review block (left pane) ---------- */
+.rl-tree-review {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
-  margin: 0 12px;
-  flex-wrap: wrap;
+  padding: 2px 2px 14px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
 }
-.rl-review-pill {
-  border: 1px solid var(--accent);
+/* nothing to review, no handoff in flight: no block, no line */
+.rl-tree-review:not(:has(span, button)) { display: none; }
+.rl-review-count {
   color: var(--accent);
-  border-radius: 13px;
-  padding: 2px 12px;
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
 }
-.rl-handoff-chip { display: inline-flex; align-items: center; gap: 8px; }
-.rl-handoff-chip-label {
+.rl-tree-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.rl-handoff-waiting {
+  flex-basis: 100%;
   color: var(--muted);
   font-size: 12px;
   font-style: italic;
-  white-space: nowrap;
 }
-.rl-welcome-review {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 8px;
-  margin-top: 18px;
-}
-.rl-handoff-recopy { margin-right: auto; order: -1; }
-@media (max-width: 1560px) {
-  .rl-handoff-chip-label { display: none; }
-}
-/* mid-handoff, pasting is the one next step — filled at rest */
-.rl-handoff-chip .rl-handoff-btn { background: var(--accent); color: #fff; }
+/* the one next step in the loop — the only filled button on screen */
+.rl-handoff-primary { background: var(--accent); color: #fff; }

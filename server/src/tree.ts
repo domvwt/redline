@@ -24,6 +24,9 @@ export async function listMarkdownFiles(root: string): Promise<TreeEntry[]> {
           // everything not finally resolved still needs someone's attention:
           // open/orphaned await Claude, addressed await the author's verdict
           openComments: sidecar.annotations.filter((a) => a.status !== "resolved").length,
+          agentReady: sidecar.annotations.filter(
+            (a) => a.status === "open" || a.status === "orphaned",
+          ).length,
         });
       }
     }

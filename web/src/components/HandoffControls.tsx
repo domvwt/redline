@@ -166,21 +166,21 @@ export function HandoffControls({
   return (
     <>
       {awaitingReply ? (
-        <span className="rl-handoff-chip">
-          <span className="rl-handoff-chip-label">waiting for reply</span>
+        <>
+          <span className="rl-handoff-waiting">waiting for reply</span>
           <button
-            className="rl-handoff-btn"
+            className="rl-handoff-btn rl-handoff-primary"
             onClick={() => setModalOpen(true)}
             title="Paste the assistant's reply to apply its revision and responses"
           >
             paste reply
           </button>
-        </span>
+        </>
       ) : readyCount > 0 ? (
         <button
           className="rl-handoff-btn"
           onClick={() => void copyHandoff()}
-          title="Copy the document and open comments as a prompt for any AI chat"
+          title="Copy your documents and open comments as a prompt for any AI chat"
         >
           copy for AI
         </button>

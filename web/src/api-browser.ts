@@ -201,6 +201,9 @@ export const api: RedlineApi = {
         path,
         name: path.split("/").pop() ?? path,
         openComments: sidecar.annotations.filter((a) => a.status !== "resolved").length,
+        agentReady: sidecar.annotations.filter(
+          (a) => a.status === "open" || a.status === "orphaned",
+        ).length,
       });
     }
     out.sort((a, b) => a.path.localeCompare(b.path));
