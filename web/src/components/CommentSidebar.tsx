@@ -240,6 +240,12 @@ function CommentCard({
       data-comment-id={annotation.id}
       onClick={() => actions.onFocus(annotation.id)}
     >
+      {annotation.status === "addressed" && (
+        <span
+          className="rl-await-dot"
+          title="Awaiting your review — accept, or reply to send it back"
+        />
+      )}
       {shortQuote && <blockquote>{shortQuote}</blockquote>}
       {annotation.status === "orphaned" && (
         <span
@@ -271,14 +277,6 @@ function CommentCard({
       />
       {annotation.status === "resolved" && !annotation.resolution?.note && (
         <span className="rl-resolved-mark">✓ resolved</span>
-      )}
-      {annotation.status === "addressed" && (
-        <span
-          className="rl-addressed-mark"
-          title="The agent proposed this — accept to close the comment, or send it back with a reply."
-        >
-          awaiting your review
-        </span>
       )}
       {annotation.resolution && annotation.resolution.note && (
         <p className={`rl-resolution rl-resolution-${annotation.resolution.action}`}>
