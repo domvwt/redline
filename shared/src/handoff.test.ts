@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyEdits,
   buildHandoffPrompt,
   fence,
   parseReply,
@@ -49,11 +48,11 @@ describe("buildHandoffPrompt", () => {
 
   it("spells out the reply format with a worked example", () => {
     const prompt = buildHandoffPrompt([doc]);
-    expect(prompt).toContain("redline:edit docs/example.md");
-    expect(prompt).toContain("<<<<<<< SEARCH");
-    expect(prompt).toContain(">>>>>>> REPLACE");
-    expect(prompt).toContain("redline:resolutions");
-    expect(prompt).toContain('"action": "declined"');
+    expect(prompt).toContain("`- [<id>] resolved: <what you changed>`");
+    expect(prompt).toContain("`- [<id>] declined: <why not>`");
+    expect(prompt).toContain("AT LEAST four backticks");
+    expect(prompt).toContain("````redline:document docs/example.md");
+    expect(prompt).toContain("- [c1] resolved: Fixed the typo in the install command.");
   });
 
   it("lists comments with marked quotes, threads, and whole-document notes", () => {
@@ -74,272 +73,221 @@ describe("buildHandoffPrompt", () => {
   });
 });
 
-const RESOLUTIONS_BLOCK = [
-  "```redline:resolutions",
-  "[",
-  '  { "id": "c1", "action": "resolved", "note": "Reworded." },',
-  '  { "id": "c2", "action": "declined", "note": "Correct as written." }',
-  "]",
-  "```",
-];
-
 describe("parseReply", () => {
-  it("parses a well-formed reply with two edits and resolutions", () => {
+  it("parses a well-formed reply: three response-line variants and one document", () => {
     const reply = [
-      "Here are my edits.",
+      "Happy to help — here is my review.",
       "",
-      "```redline:edit docs/a.md",
-      "<<<<<<< SEARCH",
-      "the quick brown fox",
-      "=======",
-      "the swift brown fox",
-      ">>>>>>> REPLACE",
-      "```",
+      "- [c1] resolved: Reworded the intro for clarity.",
+      "- c2 — declined: The number is right as written.",
+      "- **[c3]** Resolved: Covered by the c1 rewording.",
       "",
-      "```redline:edit docs/b.md",
-      "<<<<<<< SEARCH",
-      "lazy dog",
-      "=======",
-      "sleepy dog",
-      ">>>>>>> REPLACE",
-      "```",
+      "````redline:document docs/a.md",
+      "# Title",
       "",
-      ...RESOLUTIONS_BLOCK,
+      "Reworded body text.",
+      "````",
     ].join("\n");
     const parsed = parseReply(reply);
-    expect(parsed.edits).toEqual([
-      { path: "docs/a.md", search: "the quick brown fox", replace: "the swift brown fox" },
-      { path: "docs/b.md", search: "lazy dog", replace: "sleepy dog" },
+    expect(parsed.responses).toEqual([
+      { id: "c1", action: "resolved", note: "Reworded the intro for clarity." },
+      { id: "c2", action: "declined", note: "The number is right as written." },
+      { id: "c3", action: "resolved", note: "Covered by the c1 rewording." },
     ]);
-    expect(parsed.resolutions).toEqual([
-      { id: "c1", action: "resolved", note: "Reworded." },
-      { id: "c2", action: "declined", note: "Correct as written." },
+    expect(parsed.documents).toEqual([
+      { path: "docs/a.md", markdown: "# Title\n\nReworded body text." },
     ]);
     expect(parsed.warnings).toEqual([]);
+  });
+
+  it("keeps three-backtick code fences intact inside a four-backtick document block", () => {
+    const reply = [
+      "- [c1] resolved: Updated the example.",
+      "",
+      "````redline:document docs/code.md",
+      "# Code",
+      "",
+      "```js",
+      "renewed();",
+      "```",
+      "````",
+    ].join("\n");
+    const parsed = parseReply(reply);
+    expect(parsed.documents).toEqual([
+      { path: "docs/code.md", markdown: "# Code\n\n```js\nrenewed();\n```" },
+    ]);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("drops an unterminated document block with a truncation warning", () => {
+    const reply = [
+      "- [c1] resolved: Rewrote the intro.",
+      "",
+      "````redline:document docs/a.md",
+      "# Title",
+      "Half of the docum",
+    ].join("\n");
+    const parsed = parseReply(reply);
+    expect(parsed.documents).toEqual([]);
+    expect(parsed.responses).toHaveLength(1);
+    expect(parsed.warnings.some((w) => w.includes("truncated") && w.includes("docs/a.md"))).toBe(
+      true,
+    );
+  });
+
+  it("parses two document blocks", () => {
+    const reply = [
+      "- [c1] resolved: Fixed both files.",
+      "",
+      "````redline:document docs/a.md",
+      "Revised A.",
+      "````",
+      "",
+      "````redline:document docs/b.md",
+      "Revised B.",
+      "````",
+    ].join("\n");
+    const parsed = parseReply(reply);
+    expect(parsed.documents).toEqual([
+      { path: "docs/a.md", markdown: "Revised A." },
+      { path: "docs/b.md", markdown: "Revised B." },
+    ]);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("attributes a lone untagged fenced block to defaultPath with a warning", () => {
+    const body = "# Guide\n\n" + "This paragraph pads the block to document-like size. ".repeat(5);
+    const reply = ["- [c1] resolved: Rewrote the guide.", "", "```", body, "```"].join("\n");
+    const parsed = parseReply(reply, { defaultPath: "docs/guide.md" });
+    expect(parsed.documents).toEqual([{ path: "docs/guide.md", markdown: body }]);
+    expect(parsed.warnings.some((w) => w.includes("assuming") && w.includes("docs/guide.md"))).toBe(
+      true,
+    );
+  });
+
+  it("refuses the untagged fallback when several blocks could be the document", () => {
+    const big = "x".repeat(210);
+    const reply = ["- [c1] resolved: ok.", "```", big, "```", "", "```", big, "```"].join("\n");
+    const parsed = parseReply(reply, { defaultPath: "docs/a.md" });
+    expect(parsed.documents).toEqual([]);
+    expect(parsed.warnings.some((w) => w.includes("multiple untagged"))).toBe(true);
+  });
+
+  it("ignores small untagged blocks and never guesses without a defaultPath", () => {
+    const small = ["- [c1] resolved: ok.", "```", "tiny", "```"].join("\n");
+    expect(parseReply(small, { defaultPath: "docs/a.md" }).documents).toEqual([]);
+    const big = ["- [c1] resolved: ok.", "```", "x".repeat(210), "```"].join("\n");
+    expect(parseReply(big).documents).toEqual([]);
   });
 
   it("parses a reply the chat UI wrapped in one outer fence", () => {
     const reply = [
       "```",
-      "```redline:edit docs/a.md",
-      "<<<<<<< SEARCH",
-      "old text",
-      "=======",
-      "new text",
-      ">>>>>>> REPLACE",
-      "```",
-      ...RESOLUTIONS_BLOCK,
-      "```",
-    ].join("\n");
-    const parsed = parseReply(reply);
-    expect(parsed.edits).toEqual([{ path: "docs/a.md", search: "old text", replace: "new text" }]);
-    expect(parsed.resolutions).toHaveLength(2);
-  });
-
-  it("keeps code fences inside SEARCH/REPLACE content verbatim", () => {
-    const reply = [
-      "````redline:edit docs/code.md",
-      "<<<<<<< SEARCH",
-      "```js",
-      "old();",
-      "```",
-      "=======",
-      "```js",
-      "renewed();",
-      "```",
-      ">>>>>>> REPLACE",
+      "- [c1] resolved: Reworded.",
+      "",
+      "````redline:document docs/a.md",
+      "New body content.",
       "````",
-      ...RESOLUTIONS_BLOCK,
-    ].join("\n");
-    const parsed = parseReply(reply);
-    expect(parsed.edits).toEqual([
-      { path: "docs/code.md", search: "```js\nold();\n```", replace: "```js\nrenewed();\n```" },
-    ]);
-  });
-
-  it("falls back to defaultPath when the redline:edit info string is missing", () => {
-    const reply = [
-      "<<<<<<< SEARCH",
-      "old text",
-      "=======",
-      "new text",
-      ">>>>>>> REPLACE",
-      ...RESOLUTIONS_BLOCK,
-    ].join("\n");
-    const parsed = parseReply(reply, { defaultPath: "docs/only.md" });
-    expect(parsed.edits).toEqual([{ path: "docs/only.md", search: "old text", replace: "new text" }]);
-    expect(parsed.warnings).toEqual([]);
-  });
-
-  it("skips a pathless block with a warning when there is no defaultPath", () => {
-    const reply = ["<<<<<<< SEARCH", "old", "=======", "new", ">>>>>>> REPLACE"].join("\n");
-    const parsed = parseReply(reply);
-    expect(parsed.edits).toEqual([]);
-    expect(parsed.warnings.some((w) => w.includes("no redline:edit path"))).toBe(true);
-  });
-
-  it("drops a truncated final block with a warning, keeping earlier edits", () => {
-    const reply = [
-      "```redline:edit docs/a.md",
-      "<<<<<<< SEARCH",
-      "complete old",
-      "=======",
-      "complete new",
-      ">>>>>>> REPLACE",
-      "```",
-      "```redline:edit docs/a.md",
-      "<<<<<<< SEARCH",
-      "the reply was cut off he",
-    ].join("\n");
-    const parsed = parseReply(reply);
-    expect(parsed.edits).toEqual([
-      { path: "docs/a.md", search: "complete old", replace: "complete new" },
-    ]);
-    expect(parsed.warnings.some((w) => w.includes("truncated"))).toBe(true);
-  });
-
-  it("extracts the resolutions array despite surrounding prose inside the fence", () => {
-    const reply = [
-      "```redline:resolutions",
-      "Here are the resolutions you asked for:",
-      '[ { "id": "c1", "action": "resolved", "note": "Done [see edit 1]." } ]',
-      "Hope that helps!",
       "```",
     ].join("\n");
     const parsed = parseReply(reply);
-    expect(parsed.resolutions).toEqual([
-      { id: "c1", action: "resolved", note: "Done [see edit 1]." },
-    ]);
+    expect(parsed.documents).toEqual([{ path: "docs/a.md", markdown: "New body content." }]);
+    expect(parsed.responses).toEqual([{ id: "c1", action: "resolved", note: "Reworded." }]);
   });
 
-  it("finds resolutions in a plain json fence when the tagged block is missing", () => {
+  it("returns a fence-imbalanced document but warns about it", () => {
     const reply = [
-      "```json",
-      '[ { "id": "c1", "action": "resolved", "note": "ok" } ]',
-      "```",
+      "- [c1] resolved: Added an example.",
+      "",
+      "````redline:document docs/a.md",
+      "# Title",
+      "```js",
+      "code();",
+      "````",
     ].join("\n");
     const parsed = parseReply(reply);
-    expect(parsed.resolutions).toEqual([{ id: "c1", action: "resolved", note: "ok" }]);
+    expect(parsed.documents).toEqual([{ path: "docs/a.md", markdown: "# Title\n```js\ncode();" }]);
+    expect(parsed.warnings.some((w) => w.includes("unbalanced") && w.includes("docs/a.md"))).toBe(
+      true,
+    );
   });
 
   it("normalizes loose action synonyms and skips unknown actions with a warning", () => {
     const reply = [
-      "```redline:resolutions",
-      "[",
-      '  { "id": "c1", "action": "done", "note": "n1" },',
-      '  { "id": "c2", "action": "wontfix", "note": "n2" },',
-      '  { "id": "c3", "action": "maybe", "note": "n3" },',
-      '  { "id": "c4", "action": "resolved" }',
-      "]",
-      "```",
+      "- [c1] done: n1",
+      "- [c2] wontfix: n2",
+      "- [c3] maybe: n3",
+      "- [c4] resolved",
     ].join("\n");
     const parsed = parseReply(reply);
-    expect(parsed.resolutions).toEqual([
+    expect(parsed.responses).toEqual([
       { id: "c1", action: "resolved", note: "n1" },
       { id: "c2", action: "declined", note: "n2" },
       { id: "c4", action: "resolved", note: "" },
     ]);
-    expect(parsed.warnings.some((w) => w.includes('unknown resolution action "maybe"'))).toBe(true);
+    expect(parsed.warnings.some((w) => w.includes('unknown response action "maybe"'))).toBe(true);
   });
 
-  it("warns about malformed resolutions JSON instead of throwing", () => {
-    const reply = ["```redline:resolutions", '[ { "id": "c1", ', "```"].join("\n");
+  it("falls back to a redline:resolutions JSON block when there are no response lines", () => {
+    const reply = [
+      "```redline:resolutions",
+      "Here you go:",
+      '[ { "id": "c1", "action": "resolved", "note": "Done [see the intro]." } ]',
+      "```",
+    ].join("\n");
     const parsed = parseReply(reply);
-    expect(parsed.resolutions).toEqual([]);
-    expect(parsed.warnings.length).toBeGreaterThan(0);
-  });
-
-  it("warns when the reply has no resolutions block at all", () => {
-    const parsed = parseReply("Sure, I can help with that!");
-    expect(parsed.warnings.some((w) => w.includes("no resolutions block"))).toBe(true);
-  });
-});
-
-describe("applyEdits", () => {
-  const DOC = [
-    "The quick brown fox jumps over the lazy dog.",
-    "A second paragraph mentions the lazy dog again in passing.",
-    "The final paragraph is about something else entirely.",
-  ].join("\n");
-
-  const edit = (search: string, replace: string) => ({ path: "a.md", search, replace });
-
-  it("applies a unique exact match", () => {
-    const r = applyEdits(DOC, [edit("quick brown fox", "swift brown fox")]);
-    expect(r.markdown).toContain("The swift brown fox jumps");
-    expect(r.outcomes[0]).toMatchObject({ status: "applied", start: DOC.indexOf("quick") });
-  });
-
-  it("reports ambiguous when the search text occurs twice", () => {
-    const r = applyEdits(DOC, [edit("the lazy dog", "the sleepy dog")]);
-    expect(r.markdown).toBe(DOC);
-    expect(r.outcomes[0]).toEqual({ status: "ambiguous", occurrences: 2 });
-  });
-
-  it("treats a multi-occurrence no-op (search === replace) as applied", () => {
-    const r = applyEdits(DOC, [edit("the lazy dog", "the lazy dog")]);
-    expect(r.markdown).toBe(DOC);
-    expect(r.outcomes[0]).toMatchObject({ status: "applied" });
-  });
-
-  it("matches a needle the assistant re-wrapped across lines", () => {
-    const r = applyEdits(DOC, [
-      edit("second paragraph mentions\nthe lazy dog again", "second paragraph revisits the dog"),
+    expect(parsed.responses).toEqual([
+      { id: "c1", action: "resolved", note: "Done [see the intro]." },
     ]);
-    expect(r.markdown).toContain("A second paragraph revisits the dog in passing.");
-    expect(r.outcomes[0]).toMatchObject({ status: "fuzzy", errors: 0 });
   });
 
-  it("falls back to approximate matching for a typo'd needle", () => {
-    const r = applyEdits(DOC, [
-      edit("about smoething else entirley.", "about nothing in particular."),
-    ]);
-    expect(r.markdown).toContain("The final paragraph is about nothing in particular.");
-    const outcome = r.outcomes[0];
-    expect(outcome.status).toBe("fuzzy");
-    if (outcome.status === "fuzzy") expect(outcome.errors).toBeGreaterThan(0);
+  it("accepts a plain fenced JSON array shaped like responses", () => {
+    const reply = ["```json", '[ { "id": "c1", "action": "done", "note": "ok" } ]', "```"].join(
+      "\n",
+    );
+    const parsed = parseReply(reply);
+    expect(parsed.responses).toEqual([{ id: "c1", action: "resolved", note: "ok" }]);
   });
 
-  it("fails a too-short unmatched search instead of fuzzy-matching it", () => {
-    const r = applyEdits(DOC, [edit("zzq", "yyy")]);
-    expect(r.markdown).toBe(DOC);
-    expect(r.outcomes[0]).toEqual({
-      status: "failed",
-      reason: "search text too short to match safely",
+  it("never treats the JSON responses block as the untagged document", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => {
+      return `  { "id": "c${i}", "action": "resolved", "note": "a long note to pad the block out" }`;
     });
+    const reply = ["```redline:resolutions", "[", entries.join(",\n"), "]", "```"].join("\n");
+    const parsed = parseReply(reply, { defaultPath: "docs/a.md" });
+    expect(parsed.documents).toEqual([]);
+    expect(parsed.responses).toHaveLength(6);
   });
 
-  it("still applies a short search when it matches exactly once", () => {
-    const r = applyEdits(DOC, [edit("jumps", "leaps")]);
-    expect(r.markdown).toContain("brown fox leaps over");
-    expect(r.outcomes[0]).toMatchObject({ status: "applied" });
+  it("warns about malformed responses JSON instead of throwing", () => {
+    const reply = ["```redline:resolutions", '[ { "id": "c1" "action" } ]', "```"].join("\n");
+    const parsed = parseReply(reply);
+    expect(parsed.responses).toEqual([]);
+    expect(parsed.warnings.some((w) => w.includes("malformed JSON"))).toBe(true);
   });
 
-  it("applies edits sequentially so later edits see earlier results", () => {
-    const r = applyEdits(DOC, [
-      edit("quick brown fox", "nimble red panda"),
-      edit("nimble red panda jumps", "nimble red panda vaults"),
+  it("warns when the reply contains no responses at all", () => {
+    const parsed = parseReply("Sure, happy to help with that!");
+    expect(parsed.documents).toEqual([]);
+    expect(parsed.responses).toEqual([]);
+    expect(parsed.warnings.some((w) => w.includes("no comment responses"))).toBe(true);
+  });
+
+  it("does not mistake ordinary prose for response lines", () => {
+    const reply = [
+      "Overall the piece reads well: nice work.",
+      "- The second point — however: needs thought.",
+      "- [c1] resolved: The only real response here.",
+    ].join("\n");
+    const parsed = parseReply(reply);
+    expect(parsed.responses).toEqual([
+      { id: "c1", action: "resolved", note: "The only real response here." },
     ]);
-    expect(r.markdown).toContain("The nimble red panda vaults over");
-    expect(r.outcomes).toHaveLength(2);
-    expect(r.outcomes.every((o) => o.status === "applied")).toBe(true);
-  });
-
-  it("supports deletion via an empty replace", () => {
-    const r = applyEdits(DOC, [edit(" again in passing", "")]);
-    expect(r.markdown).toContain("mentions the lazy dog.");
-    expect(r.outcomes[0]).toMatchObject({ status: "applied" });
-  });
-
-  it("fails cleanly when the search text is nowhere near the document", () => {
-    const r = applyEdits(DOC, [edit("completely unrelated wording, nowhere present", "x")]);
-    expect(r.markdown).toBe(DOC);
-    expect(r.outcomes[0]).toEqual({ status: "failed", reason: "search text not found" });
   });
 });
 
 describe("round trip", () => {
-  it("a reply written against the generated prompt parses and applies", () => {
+  it("a reply written against the generated prompt parses back cleanly", () => {
     const doc: HandoffDoc = {
       path: "docs/guide.md",
       markdown: "# Guide\n\nAlways use `npm insatll` to fetch dependencies.\n",
@@ -355,22 +303,19 @@ describe("round trip", () => {
     const prompt = buildHandoffPrompt([doc]);
     expect(prompt).toContain(doc.markdown);
 
+    const revised = "# Guide\n\nAlways use `npm install` to fetch dependencies.\n";
     const reply = [
-      "```redline:edit docs/guide.md",
-      "<<<<<<< SEARCH",
-      "Always use `npm insatll` to fetch",
-      "=======",
-      "Always use `npm install` to fetch",
-      ">>>>>>> REPLACE",
-      "```",
-      "```redline:resolutions",
-      '[ { "id": "c1", "action": "resolved", "note": "Fixed the typo." } ]',
-      "```",
+      "- [c1] resolved: Fixed the typo in the install command.",
+      "",
+      "````redline:document docs/guide.md",
+      revised,
+      "````",
     ].join("\n");
     const parsed = parseReply(reply);
     expect(parsed.warnings).toEqual([]);
-    const applied = applyEdits(doc.markdown, parsed.edits);
-    expect(applied.markdown).toContain("`npm install`");
-    expect(applied.outcomes[0]).toMatchObject({ status: "applied" });
+    expect(parsed.responses).toEqual([
+      { id: "c1", action: "resolved", note: "Fixed the typo in the install command." },
+    ]);
+    expect(parsed.documents).toEqual([{ path: "docs/guide.md", markdown: revised }]);
   });
 });

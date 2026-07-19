@@ -32,9 +32,12 @@ interface Props {
   currentPath: string | null;
   onOpen(path: string): void;
   onOpenResult(result: SearchResult): void;
+  /** present only where removing a document makes sense (the browser store —
+   *  the daemon tree mirrors the folder on disk) */
+  onRemove?(path: string): void;
 }
 
-export function FileTree({ entries, currentPath, onOpen, onOpenResult }: Props) {
+export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove }: Props) {
   const tree = useMemo(() => buildTree(entries), [entries]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -91,7 +94,7 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult }: Props) 
         );
       })}
       {node.files.map((entry) => (
-        <li key={entry.path}>
+        <li key={entry.path} className={onRemove ? "rl-tree-li removable" : "rl-tree-li"}>
           <button
             className={entry.path === currentPath ? "rl-tree-item active" : "rl-tree-item"}
             style={{ paddingLeft: 10 + depth * 14 }}
@@ -101,6 +104,15 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult }: Props) 
             <span className="rl-tree-name">{entry.name}</span>
             {entry.openComments > 0 && <span className="rl-badge">{entry.openComments}</span>}
           </button>
+          {onRemove && (
+            <button
+              className="rl-tree-remove"
+              title={`Remove ${entry.name} and its comments from this browser`}
+              onClick={() => onRemove(entry.path)}
+            >
+              ✕
+            </button>
+          )}
         </li>
       ))}
     </>

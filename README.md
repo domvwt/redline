@@ -204,12 +204,12 @@ local agent editing files, you round-trip through any AI chat:
 1. Drop or paste a markdown document in, review it, leave comments.
 2. **copy for AI** (in the status bar) puts a self-contained prompt on your
    clipboard: the document, your comments with their quoted passages, and
-   exact instructions for how to reply. Paste it into ChatGPT, Microsoft
+   instructions for how to reply. Paste it into ChatGPT, Microsoft
    Copilot, Gemini, Claude — any assistant.
-3. **paste reply** brings the assistant's answer back: redline picks out the
-   edit blocks and resolution notes, applies the edits (fuzzy-matched, so
-   slightly mangled quotes still land), and marks each comment *awaiting
-   your review* with the assistant's note attached.
+3. The assistant answers each comment and returns the revised document —
+   the natural shape of a chat reply. **paste reply** brings it back:
+   redline applies the new version and marks each comment *awaiting your
+   review* with the assistant's response attached.
 4. From there it's the normal workflow: review the diff under **● changes**,
    and `accept` or `reply` on each card.
 

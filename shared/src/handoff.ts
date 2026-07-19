@@ -1,5 +1,3 @@
-import search from "approx-string-match";
-
 export interface HandoffComment {
   id: string;
   /** null for document-level or project-level notes */
@@ -17,12 +15,6 @@ export interface HandoffDoc {
   comments: HandoffComment[];
 }
 
-export interface ReplyEdit {
-  path: string;
-  search: string;
-  replace: string;
-}
-
 export interface ReplyResolution {
   id: string;
   action: "resolved" | "declined";
@@ -30,22 +22,11 @@ export interface ReplyResolution {
 }
 
 export interface ParsedReply {
-  edits: ReplyEdit[];
-  resolutions: ReplyResolution[];
+  /** complete revised documents, one per changed doc */
+  documents: Array<{ path: string; markdown: string }>;
+  responses: ReplyResolution[];
   /** human-readable problems: truncated block, malformed JSON, unknown action… */
   warnings: string[];
-}
-
-/** start/end span the replacement text in the resulting markdown */
-export type EditOutcome =
-  | { status: "applied"; start: number; end: number }
-  | { status: "fuzzy"; start: number; end: number; errors: number }
-  | { status: "ambiguous"; occurrences: number }
-  | { status: "failed"; reason: string };
-
-export interface ApplyResult {
-  markdown: string;
-  outcomes: EditOutcome[]; // 1:1 with input edits
 }
 
 /**
@@ -61,9 +42,7 @@ export function fence(text: string): string {
 
 function renderComment(c: HandoffComment, wholeLabel: string): string[] {
   const where =
-    c.quote === null
-      ? `(${wholeLabel})`
-      : `…${c.prefix ?? ""}«${c.quote}»${c.suffix ?? ""}…`;
+    c.quote === null ? `(${wholeLabel})` : `…${c.prefix ?? ""}«${c.quote}»${c.suffix ?? ""}…`;
   const lines = [`- Comment \`${c.id}\` — ${where}`, `  - comment: ${c.comment}`];
   for (const t of c.thread) {
     // "claude" is the historic wire value for agent entries (see types.ts)
@@ -92,43 +71,41 @@ export function buildHandoffPrompt(
     "- If a comment is misguided or would make the text worse, decline it with",
     "  a reason instead of editing.",
     "",
-    "## Reply format (strict — a tool parses your reply)",
+    "## Reply format (a tool parses your reply)",
     "",
-    "Return each edit as a fenced code block whose info string is",
-    "`redline:edit <path>`, containing exactly one SEARCH/REPLACE pair:",
+    "Reply in two parts.",
     "",
+    "**Part 1 — respond to every comment**, one line per comment, in a list.",
+    "Each line starts with the comment id in brackets, then your verdict and a",
+    "note written to the author:",
+    "",
+    "- `- [<id>] resolved: <what you changed>`",
+    "- `- [<id>] declined: <why not>`",
+    "",
+    "These lines are read by the author in the chat AND parsed by the tool —",
+    "keep each response on a single line. Every comment gets a response line,",
+    "even when no text changed (declined with a reason, or resolved noting",
+    "which other change covered it).",
+    "",
+    "**Part 2 — output the complete revised version of every document you",
+    "changed**, each in its own fenced block whose info string is",
+    "`redline:document <path>`. The ENTIRE document from first line to last —",
+    "not a diff, not an excerpt, and no commentary inside the block. Omit",
+    "documents you did not change. Use a fence of AT LEAST four backticks so",
+    "documents containing three-backtick code fences survive.",
+    "",
+    "For example:",
+    "",
+    "`````",
+    "- [c1] resolved: Fixed the typo in the install command.",
+    "- [c2] declined: The figure is correct as written.",
+    "",
+    "````redline:document docs/example.md",
+    "# Example",
+    "",
+    "The complete revised document, from first line to last.",
     "````",
-    "```redline:edit docs/example.md",
-    "<<<<<<< SEARCH",
-    "teh quick brown fox",
-    "=======",
-    "the quick brown fox",
-    ">>>>>>> REPLACE",
-    "```",
-    "````",
-    "",
-    "- SEARCH text must be copied verbatim from the document — including exact",
-    "  whitespace. Keep it as short as possible while still unique in the",
-    "  document.",
-    "- Use one block per edit, as many blocks as you need. Never return the",
-    "  whole revised document.",
-    "- After all edit blocks, end your reply with exactly ONE resolutions",
-    "  block: a fenced block with info string `redline:resolutions` whose body",
-    "  is a JSON array with one entry per comment:",
-    "",
-    "````",
-    "```redline:resolutions",
-    "[",
-    '  { "id": "c1", "action": "resolved", "note": "Fixed the typo." },',
-    '  { "id": "c2", "action": "declined", "note": "The figure is correct as written." }',
-    "]",
-    "```",
-    "````",
-    "",
-    '- "action" is "resolved" or "declined". "note" is written to the author:',
-    "  explain what changed, or why you declined.",
-    "- Every comment gets a resolution entry, even when no text changed —",
-    "  declined with a reason, or resolved noting which other edit covered it.",
+    "`````",
     "",
     "## Documents",
   ];
@@ -149,7 +126,7 @@ export function buildHandoffPrompt(
       "## Project-wide notes",
       "",
       "These apply to the project as a whole rather than to one passage. They",
-      "may require no text change — each still needs its own resolution entry.",
+      "may require no text change — each still needs its own response line.",
       "",
     );
     for (const c of projectNotes) out.push(...renderComment(c, "project-wide note"));
@@ -158,17 +135,60 @@ export function buildHandoffPrompt(
   return out.join("\n");
 }
 
-// Marker lines tolerate leading/trailing whitespace and 3-or-more marker chars
-// — chat UIs and sloppy assistants mangle both.
-const SEARCH_RE = /^\s*<{3,}\s*SEARCH\s*$/;
-const DIVIDER_RE = /^\s*={3,}\s*$/;
-const REPLACE_RE = /^\s*>{3,}\s*REPLACE\s*$/;
-const EDIT_FENCE_RE = /^\s*(?:`{3,}|~{3,})\s*redline:edit\s+(.+?)\s*$/;
+const DOC_FENCE_RE = /^\s*(`{3,}|~{3,})\s*redline:document\s+(.+?)\s*$/;
 const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE_RE = /^\s*(`{3,}|~{3,})\s*$/;
+// fence-imbalance guard counts fence lines at line starts (markdown allows up
+// to three spaces of indent)
+const FENCE_AT_LINE_START_RE = /^ {0,3}(?:`{3,}|~{3,})/;
 
 const RESOLVED_ACTIONS = new Set(["resolved", "done", "fixed", "accepted"]);
 const DECLINED_ACTIONS = new Set(["declined", "rejected", "wontfix"]);
+
+function normalizeAction(action: string): "resolved" | "declined" | null {
+  const norm = action.trim().toLowerCase();
+  if (RESOLVED_ACTIONS.has(norm)) return "resolved";
+  if (DECLINED_ACTIONS.has(norm)) return "declined";
+  return null;
+}
+
+interface ResponseLine {
+  id: string;
+  action: string;
+  note: string;
+  /** a bracketed id is a strong signal the line was meant as a response */
+  bracketed: boolean;
+}
+
+// `[id] <action>: note` — the separator before the action and the note itself
+// are both optional when the id is bracketed.
+const BRACKETED_RESPONSE_RE =
+  /^\[\s*([^[\]\s]+)\s*\]\s*[—–:-]?\s*([A-Za-z][A-Za-z-]*)(?:\s*[—–:-]\s*(.*))?$/;
+// `id — <action>: note` — a plain id requires explicit separators on both
+// sides of the action so prose like "I resolved: it" cannot masquerade as a
+// response line.
+const PLAIN_RESPONSE_RE = /^([\w./-]+)(?:\s*[—–:]\s*|\s+-\s+)([A-Za-z][A-Za-z-]*)\s*[—–:-]\s*(.*)$/;
+
+function parseResponseLine(line: string): ResponseLine | null {
+  let s = line.trim();
+  const bullet = /^(?:[-*+]|\d+[.)])\s+/.exec(s);
+  if (bullet) s = s.slice(bullet[0].length);
+  s = s.replace(/\*\*|__/g, ""); // bold markers around the id or action
+  const bracketed = BRACKETED_RESPONSE_RE.exec(s);
+  if (bracketed) {
+    return {
+      id: bracketed[1],
+      action: bracketed[2],
+      note: (bracketed[3] ?? "").trim(),
+      bracketed: true,
+    };
+  }
+  const plain = PLAIN_RESPONSE_RE.exec(s);
+  if (plain) {
+    return { id: plain[1], action: plain[2], note: plain[3].trim(), bracketed: false };
+  }
+  return null;
+}
 
 /**
  * Extract the first balanced `[` … `]` span, respecting JSON string literals —
@@ -196,110 +216,98 @@ function extractArraySpan(text: string): string | null {
   return null;
 }
 
-function normalizeResolutions(items: unknown, warnings: string[]): ReplyResolution[] {
+function normalizeJsonResponses(items: unknown, warnings: string[]): ReplyResolution[] {
   if (!Array.isArray(items)) {
-    warnings.push("resolutions block is not a JSON array; ignored");
+    warnings.push("responses block is not a JSON array; ignored");
     return [];
   }
   const out: ReplyResolution[] = [];
   for (const item of items) {
     if (typeof item !== "object" || item === null) {
-      warnings.push("resolution entry is not an object; skipped");
+      warnings.push("response entry is not an object; skipped");
       continue;
     }
     const { id, action, note } = item as Record<string, unknown>;
     if (typeof id !== "string" || typeof action !== "string") {
-      warnings.push("resolution entry missing string id or action; skipped");
+      warnings.push("response entry missing string id or action; skipped");
       continue;
     }
-    const norm = action.trim().toLowerCase();
-    if (RESOLVED_ACTIONS.has(norm)) {
-      out.push({ id, action: "resolved", note: typeof note === "string" ? note : "" });
-    } else if (DECLINED_ACTIONS.has(norm)) {
-      out.push({ id, action: "declined", note: typeof note === "string" ? note : "" });
-    } else {
-      warnings.push(`unknown resolution action "${action}" for comment ${id}; entry skipped`);
+    const norm = normalizeAction(action);
+    if (norm === null) {
+      warnings.push(`unknown response action "${action}" for comment ${id}; entry skipped`);
+      continue;
     }
+    out.push({ id, action: norm, note: typeof note === "string" ? note : "" });
   }
   return out;
 }
 
+// Untagged fenced blocks shorter than this cannot be mistaken for a revised
+// document in the defaultPath fallback.
+const MIN_UNTAGGED_DOC_LEN = 200;
+
 export function parseReply(text: string, opts: { defaultPath?: string } = {}): ParsedReply {
   const warnings: string[] = [];
-  const edits: ReplyEdit[] = [];
+  const documents: Array<{ path: string; markdown: string }> = [];
   const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  // lines belonging to edit blocks — excluded from resolution scanning so
-  // JSON-looking content inside an edit's SEARCH/REPLACE is never misread
+  // lines belonging to tagged document blocks — a document's content must
+  // never be misread as response lines or as another fenced block
   const consumed = new Set<number>();
+  let sawTaggedDoc = false;
 
-  let i = 0;
-  while (i < lines.length) {
-    if (!SEARCH_RE.test(lines[i])) {
-      i++;
-      continue;
-    }
-    const blockStart = i;
-    // path from a `redline:edit <path>` fence line preceding SEARCH (blank
-    // lines skipped); the fence itself is optional
-    let path: string | undefined;
-    let fenceLine = -1;
-    for (let j = i - 1; j >= 0; j--) {
-      if (lines[j].trim() === "") continue;
-      const m = EDIT_FENCE_RE.exec(lines[j]);
-      if (m) {
-        path = m[1];
-        fenceLine = j;
+  for (let i = 0; i < lines.length; i++) {
+    const m = DOC_FENCE_RE.exec(lines[i]);
+    if (!m) continue;
+    sawTaggedDoc = true;
+    const [, marks, path] = m;
+    const body: string[] = [];
+    let closed = false;
+    let k = i + 1;
+    for (; k < lines.length; k++) {
+      const close = FENCE_CLOSE_RE.exec(lines[k]);
+      if (close && close[1][0] === marks[0] && close[1].length >= marks.length) {
+        closed = true;
+        break;
       }
+      body.push(lines[k]);
+    }
+    if (!closed) {
+      // never let a half document through
+      warnings.push(`reply appears truncated — ${path} was not applied`);
+      for (let j = i; j < k; j++) consumed.add(j);
       break;
     }
-    path ??= opts.defaultPath;
-
-    i++;
-    const searchLines: string[] = [];
-    while (i < lines.length && !DIVIDER_RE.test(lines[i]) && !SEARCH_RE.test(lines[i])) {
-      searchLines.push(lines[i]);
-      i++;
+    for (let j = i; j <= k; j++) consumed.add(j);
+    // fence-collision guard: an odd number of fence lines inside the document
+    // suggests the enclosing fence was too short and the content is suspect
+    const fenceLineCount = body.filter((l) => FENCE_AT_LINE_START_RE.test(l)).length;
+    if (fenceLineCount % 2 === 1) {
+      warnings.push(`document ${path} has an unbalanced number of code fence lines`);
     }
-    if (i >= lines.length) {
-      warnings.push("reply appears truncated: edit block never reached its ======= divider");
-      break;
-    }
-    if (SEARCH_RE.test(lines[i])) {
-      warnings.push("malformed edit block: new SEARCH marker before ======= divider; block dropped");
-      continue; // re-scan from the new marker
-    }
-
-    i++;
-    const replaceLines: string[] = [];
-    while (i < lines.length && !REPLACE_RE.test(lines[i]) && !SEARCH_RE.test(lines[i])) {
-      replaceLines.push(lines[i]);
-      i++;
-    }
-    if (i >= lines.length) {
-      warnings.push("reply appears truncated: edit block never reached its REPLACE marker");
-      break;
-    }
-    if (SEARCH_RE.test(lines[i])) {
-      warnings.push("malformed edit block: new SEARCH marker before REPLACE marker; block dropped");
-      continue;
-    }
-
-    i++; // past the REPLACE marker
-    if (fenceLine !== -1) consumed.add(fenceLine);
-    for (let j = blockStart; j < i; j++) consumed.add(j);
-    if (i < lines.length && FENCE_CLOSE_RE.test(lines[i])) consumed.add(i);
-
-    if (path === undefined) {
-      warnings.push("edit block has no redline:edit path and no default path; block skipped");
-      continue;
-    }
-    edits.push({ path, search: searchLines.join("\n"), replace: replaceLines.join("\n") });
+    documents.push({ path, markdown: body.join("\n") });
+    i = k;
   }
 
-  // Fenced-block enumeration for resolutions. Nested fences inside a body are
-  // not tracked — the first bare fence line closes the block — which is safe
-  // here because a resolutions body is JSON, and edit-block lines (the only
-  // fence-bearing content) are excluded via `consumed`.
+  const responses: ReplyResolution[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (consumed.has(i)) continue;
+    const parsed = parseResponseLine(lines[i]);
+    if (!parsed) continue;
+    const action = normalizeAction(parsed.action);
+    if (action !== null) {
+      responses.push({ id: parsed.id, action, note: parsed.note });
+      consumed.add(i);
+    } else if (parsed.bracketed) {
+      warnings.push(
+        `unknown response action "${parsed.action}" for comment ${parsed.id}; line skipped`,
+      );
+    }
+    // a plain-id line with an unknown action is ordinary prose — ignore it
+  }
+
+  // Remaining fenced blocks: the JSON responses fallback and the untagged
+  // document fallback both draw from these. Nested fences are not tracked —
+  // the first bare fence line of sufficient length closes a block.
   interface FencedBlock {
     info: string;
     body: string;
@@ -312,8 +320,8 @@ export function parseReply(text: string, opts: { defaultPath?: string } = {}): P
     if (!open) continue;
     const [, marks, rawInfo] = open;
     const body: string[] = [];
-    let closed = false;
     let k = j + 1;
+    let closed = false;
     for (; k < lines.length; k++) {
       const close = FENCE_CLOSE_RE.exec(lines[k]);
       if (close && close[1][0] === marks[0] && close[1].length >= marks.length) {
@@ -323,196 +331,79 @@ export function parseReply(text: string, opts: { defaultPath?: string } = {}): P
       body.push(lines[k]);
     }
     blocks.push({ info: rawInfo.trim(), body: body.join("\n"), closed });
-    j = k; // resume after the closing fence (or at EOF)
+    j = k;
   }
 
-  const parseArray = (body: string): unknown | undefined => {
-    const span = extractArraySpan(body.replace(/^\uFEFF/, ""));
-    if (span === null) return undefined;
-    try {
-      return JSON.parse(span);
-    } catch {
-      return undefined;
-    }
-  };
-
-  let resolutions: ReplyResolution[] = [];
-  const tagged = blocks.filter((b) => b.info.includes("redline:resolutions"));
-  if (tagged.length > 0) {
-    if (tagged.length > 1) {
-      warnings.push("multiple redline:resolutions blocks; only the first was used");
-    }
-    const body = tagged[0].body.replace(/^\uFEFF/, "");
-    const span = extractArraySpan(body);
-    if (span === null) {
-      warnings.push("resolutions block contains no JSON array");
+  // JSON fallback: some assistants still produce a resolutions-style array
+  // instead of response lines.
+  let jsonBlock: FencedBlock | null = null;
+  if (responses.length === 0) {
+    const tagged = blocks.find((b) => b.info.includes("redline:resolutions"));
+    if (tagged) {
+      jsonBlock = tagged;
+      const span = extractArraySpan(tagged.body.replace(/^\uFEFF/, ""));
+      if (span === null) {
+        warnings.push("responses block contains no JSON array");
+      } else {
+        try {
+          responses.push(...normalizeJsonResponses(JSON.parse(span), warnings));
+        } catch (err) {
+          warnings.push(`responses block contains malformed JSON: ${(err as Error).message}`);
+        }
+      }
     } else {
-      try {
-        resolutions = normalizeResolutions(JSON.parse(span), warnings);
-      } catch (err) {
-        warnings.push(`resolutions block contains malformed JSON: ${(err as Error).message}`);
+      for (const b of blocks) {
+        const span = extractArraySpan(b.body.replace(/^\uFEFF/, ""));
+        if (span === null) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(span);
+        } catch {
+          continue;
+        }
+        if (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          parsed.every(
+            (item) =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof (item as Record<string, unknown>).id === "string" &&
+              typeof (item as Record<string, unknown>).action === "string",
+          )
+        ) {
+          jsonBlock = b;
+          responses.push(...normalizeJsonResponses(parsed, warnings));
+          break;
+        }
       }
     }
-  } else {
-    // fallback: any fenced JSON block shaped like a resolutions array
-    let found = false;
-    for (const b of blocks) {
-      const parsed = parseArray(b.body);
-      if (
-        Array.isArray(parsed) &&
-        parsed.length > 0 &&
-        parsed.every(
-          (item) =>
-            typeof item === "object" &&
-            item !== null &&
-            typeof (item as Record<string, unknown>).id === "string" &&
-            typeof (item as Record<string, unknown>).action === "string",
-        )
-      ) {
-        resolutions = normalizeResolutions(parsed, warnings);
-        found = true;
-        break;
-      }
-    }
-    if (!found) warnings.push("no resolutions block found in reply");
   }
 
-  return { edits, resolutions, warnings };
-}
-
-// Below this length, whitespace-lenient and approximate matching false-match
-// too easily; only an exact hit is trusted.
-const MIN_FUZZY_SEARCH_LEN = 12;
-
-function findAllExact(haystack: string, needle: string): number[] {
-  const out: number[] = [];
-  if (!needle) return out;
-  let idx = haystack.indexOf(needle);
-  while (idx !== -1) {
-    out.push(idx);
-    idx = haystack.indexOf(needle, idx + 1);
-  }
-  return out;
-}
-
-/**
- * Match with whitespace runs collapsed on both sides, mapping the hit back to
- * original coordinates — catches the #1 chat-assistant failure: re-wrapped
- * lines.
- */
-function lenientMatches(
-  haystack: string,
-  needle: string,
-): Array<{ start: number; end: number }> {
-  const chars: string[] = [];
-  const origStart: number[] = [];
-  const origEnd: number[] = [];
-  let i = 0;
-  while (i < haystack.length) {
-    if (/\s/.test(haystack[i])) {
-      let j = i;
-      while (j < haystack.length && /\s/.test(haystack[j])) j++;
-      chars.push(" ");
-      origStart.push(i);
-      origEnd.push(j);
-      i = j;
-    } else {
-      chars.push(haystack[i]);
-      origStart.push(i);
-      origEnd.push(i + 1);
-      i++;
+  // Untagged fallback: a lone fenced block of document-like size may be the
+  // revised doc with its info string dropped — but only when no tagged block
+  // was seen at all (a truncated tagged block must not be resurrected).
+  if (!sawTaggedDoc && opts.defaultPath !== undefined) {
+    const candidates = blocks.filter(
+      (b) =>
+        b !== jsonBlock &&
+        b.closed &&
+        !b.info.includes("redline:resolutions") &&
+        b.body.length >= MIN_UNTAGGED_DOC_LEN,
+    );
+    if (candidates.length === 1) {
+      warnings.push(
+        `reply contained no redline:document block; assuming the untagged fenced block is ${opts.defaultPath}`,
+      );
+      documents.push({ path: opts.defaultPath, markdown: candidates[0].body });
+    } else if (candidates.length > 1) {
+      warnings.push(
+        "reply contained no redline:document block and multiple untagged fenced blocks; no document applied",
+      );
     }
   }
-  const collapsedHay = chars.join("");
-  const collapsedNeedle = needle.replace(/\s+/g, " ").trim();
-  if (!collapsedNeedle) return [];
-  return findAllExact(collapsedHay, collapsedNeedle).map((s) => ({
-    start: origStart[s],
-    end: origEnd[s + collapsedNeedle.length - 1],
-  }));
-}
 
-function splice(text: string, start: number, end: number, replacement: string): string {
-  return text.slice(0, start) + replacement + text.slice(end);
-}
+  if (responses.length === 0) warnings.push("no comment responses found in reply");
 
-function applyOne(text: string, edit: ReplyEdit): { text: string; outcome: EditOutcome } {
-  const needle = edit.search;
-  const hits = findAllExact(text, needle);
-  if (hits.length === 1) {
-    const start = hits[0];
-    return {
-      text: splice(text, start, start + needle.length, edit.replace),
-      outcome: { status: "applied", start, end: start + edit.replace.length },
-    };
-  }
-  if (hits.length > 1) {
-    // every occurrence yields the same result string only when the edit is a
-    // no-op — treat as applied at the first occurrence
-    if (needle === edit.replace) {
-      return {
-        text,
-        outcome: { status: "applied", start: hits[0], end: hits[0] + edit.replace.length },
-      };
-    }
-    return { text, outcome: { status: "ambiguous", occurrences: hits.length } };
-  }
-
-  if (needle.length < MIN_FUZZY_SEARCH_LEN) {
-    return { text, outcome: { status: "failed", reason: "search text too short to match safely" } };
-  }
-
-  const lenient = lenientMatches(text, needle);
-  if (lenient.length === 1) {
-    const { start, end } = lenient[0];
-    return {
-      text: splice(text, start, end, edit.replace),
-      outcome: { status: "fuzzy", start, end: start + edit.replace.length, errors: 0 },
-    };
-  }
-  if (lenient.length > 1) {
-    return { text, outcome: { status: "ambiguous", occurrences: lenient.length } };
-  }
-
-  const maxErrors = Math.ceil(needle.length * 0.2);
-  // approx-string-match can return degenerate matches for garbled needles;
-  // require the match to retain most of the search text (as in anchor-core)
-  const matches = search(text, needle, maxErrors).filter(
-    (m) => m.end - m.start >= needle.length * 0.5,
-  );
-  if (matches.length > 0) {
-    const minErrors = Math.min(...matches.map((m) => m.errors));
-    // the library reports several overlapping spans per site — collapse them,
-    // so only genuinely distinct sites count toward ambiguity
-    const sites: Array<{ start: number; end: number }> = [];
-    for (const m of matches
-      .filter((m) => m.errors === minErrors)
-      .sort((a, b) => a.start - b.start)) {
-      const last = sites[sites.length - 1];
-      if (last && m.start < last.end) continue;
-      sites.push({ start: m.start, end: m.end });
-    }
-    if (sites.length > 1) {
-      return { text, outcome: { status: "ambiguous", occurrences: sites.length } };
-    }
-    const { start, end } = sites[0];
-    return {
-      text: splice(text, start, end, edit.replace),
-      outcome: { status: "fuzzy", start, end: start + edit.replace.length, errors: minErrors },
-    };
-  }
-
-  return { text, outcome: { status: "failed", reason: "search text not found" } };
-}
-
-/** Apply edits sequentially: each edit sees the result of the previous one. */
-export function applyEdits(markdown: string, edits: ReplyEdit[]): ApplyResult {
-  let text = markdown;
-  const outcomes: EditOutcome[] = [];
-  for (const edit of edits) {
-    const result = applyOne(text, edit);
-    text = result.text;
-    outcomes.push(result.outcome);
-  }
-  return { markdown: text, outcomes };
+  return { documents, responses, warnings };
 }

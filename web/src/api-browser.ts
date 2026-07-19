@@ -128,11 +128,11 @@ This is the **web version** — everything you see lives in your browser
    the exact phrase. Add document-wide thoughts with *+ document note*.
 3. **Hand off to your AI**: press *copy for AI* and paste the result into any
    assistant — ChatGPT, Copilot, Gemini, Claude. It contains the document,
-   your comments, and precise instructions for replying.
-4. **Paste the reply back**: press *paste reply*, and redline applies the
-   assistant's edits, attaches its notes to your comments, and marks each one
-   *awaiting your review* — you accept or send back with a reply, comment by
-   comment.
+   your comments, and instructions for replying.
+4. **Paste the reply back**: the assistant answers each comment and returns a
+   revised document. Press *paste reply*, and redline applies the new
+   version, attaches each response to its comment, and marks them *awaiting
+   your review* — you accept or send back with a reply, comment by comment.
 
 Comments survive edits: quotes re-anchor when the text moves, and a passage
 that disappears entirely turns into an unanchored comment rather than being
@@ -146,6 +146,10 @@ let seeded = false;
 async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
+  // the flag (not doc count) decides: deleting every document — the welcome
+  // doc included — must not resurrect it on the next visit
+  if (localStorage.getItem("redline-seeded") === "1") return;
+  localStorage.setItem("redline-seeded", "1");
   const keys = await idbKeys(DOCS);
   if (keys.length > 0) return;
   await idbPut(DOCS, WELCOME_PATH, WELCOME);
@@ -332,6 +336,15 @@ export const api: RedlineApi = {
       emit({ type: "comments:changed", path: body.path });
       return annotation;
     }),
+
+  deleteDoc: async (path) => {
+    await readDoc(path); // 404 for a doc that was never there
+    await idbDelete(DOCS, path);
+    await idbDelete(BASELINES, path);
+    await idbDelete(SIDECARS, path);
+    emit({ type: "comments:changed", path });
+    return { ok: true };
+  },
 
   deleteComment: async (id, path) =>
     withLock(path, async () => {

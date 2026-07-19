@@ -1,19 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  applyEdits,
-  buildHandoffPrompt,
-  parseReply,
-  PROJECT_PATH,
-} from "@redline/shared";
-import type { Annotation, EditOutcome, HandoffComment, HandoffDoc } from "@redline/shared";
+import { buildHandoffPrompt, parseReply, PROJECT_PATH } from "@redline/shared";
+import type { Annotation, HandoffComment, HandoffDoc } from "@redline/shared";
 import { api } from "../api.ts";
 import { proposeFromReply, writeDocAsAgent } from "../api-browser.ts";
 
 /**
  * The static build's agent leg: copy a self-contained prompt into any AI
- * chat, paste the structured reply back, and redline applies the edits and
- * records the proposals. Only ever rendered in STATIC_MODE (lazy-loaded, so
- * the daemon bundle never ships it).
+ * chat; the assistant responds to each comment and returns the complete
+ * revised document(s); pasting the reply applies the new versions and
+ * records the responses as proposals. Only ever rendered in STATIC_MODE
+ * (lazy-loaded, so the daemon bundle never ships it).
  */
 
 function toHandoffComment(a: Annotation): HandoffComment {
@@ -30,9 +26,10 @@ function toHandoffComment(a: Annotation): HandoffComment {
 const isOpen = (a: Annotation) => a.status === "open" || a.status === "orphaned";
 
 interface ApplyReport {
-  edits: Array<{ path: string; search: string; outcome: EditOutcome }>;
+  updated: string[];
+  unchanged: string[];
   proposals: number;
-  skipped: string[];
+  warnings: string[];
 }
 
 export function HandoffControls({
@@ -46,6 +43,16 @@ export function HandoffControls({
   const [reply, setReply] = useState("");
   const [report, setReport] = useState<ApplyReport | null>(null);
   const [applying, setApplying] = useState(false);
+  // survives the trip to the chat tab (and a reload): copied but not yet
+  // pasted back — the UI keeps pointing at the next step until then
+  const [awaitingReply, setAwaitingReply] = useState(
+    () => localStorage.getItem("redline-handoff-pending") === "1",
+  );
+  const setPending = (on: boolean) => {
+    setAwaitingReply(on);
+    if (on) localStorage.setItem("redline-handoff-pending", "1");
+    else localStorage.removeItem("redline-handoff-pending");
+  };
 
   const parsed = useMemo(
     () => (reply.trim() ? parseReply(reply, { defaultPath: currentPath ?? undefined }) : null),
@@ -71,6 +78,7 @@ export function HandoffControls({
         return;
       }
       await navigator.clipboard.writeText(buildHandoffPrompt(docs, { projectNotes }));
+      setPending(true);
       onNotice(
         `Copied ${count} comment${count === 1 ? "" : "s"} — paste into any AI chat, then bring its reply back here.`,
       );
@@ -90,44 +98,46 @@ export function HandoffControls({
         for (const a of (await api.getComments(p)).annotations) idToPath.set(a.id, p);
       }
 
-      const report: ApplyReport = { edits: [], proposals: 0, skipped: [...parsed.warnings] };
+      const report: ApplyReport = {
+        updated: [],
+        unchanged: [],
+        proposals: 0,
+        warnings: [...parsed.warnings],
+      };
 
-      const byPath = new Map<string, typeof parsed.edits>();
-      for (const e of parsed.edits) {
-        byPath.set(e.path, [...(byPath.get(e.path) ?? []), e]);
-      }
-      for (const [p, edits] of byPath) {
-        let markdown: string;
+      for (const doc of parsed.documents) {
+        let current: string;
         try {
-          ({ markdown } = await api.getDoc(p));
+          ({ markdown: current } = await api.getDoc(doc.path));
         } catch {
-          for (const e of edits) {
-            report.edits.push({
-              path: p,
-              search: e.search,
-              outcome: { status: "failed", reason: `no such document: ${p}` },
-            });
-          }
+          report.warnings.push(`no such document: ${doc.path} — skipped`);
           continue;
         }
-        const result = applyEdits(markdown, edits);
-        edits.forEach((e, i) => {
-          report.edits.push({ path: p, search: e.search, outcome: result.outcomes[i] });
-        });
-        if (result.markdown !== markdown) await writeDocAsAgent(p, result.markdown);
+        if (doc.markdown === current) {
+          report.unchanged.push(doc.path);
+          continue;
+        }
+        if (doc.markdown.length < current.length / 2) {
+          report.warnings.push(
+            `${doc.path} came back less than half its previous size — check the diff carefully`,
+          );
+        }
+        await writeDocAsAgent(doc.path, doc.markdown);
+        report.updated.push(doc.path);
       }
 
-      for (const r of parsed.resolutions) {
+      for (const r of parsed.responses) {
         const p = idToPath.get(r.id);
         if (!p) {
-          report.skipped.push(`resolution for unknown comment id ${r.id}`);
+          report.warnings.push(`response for unknown comment id ${r.id}`);
           continue;
         }
         const applied = await proposeFromReply(p, r.id, r.action, r.note);
         if (applied) report.proposals++;
-        else report.skipped.push(`comment ${r.id} was already resolved — proposal skipped`);
+        else report.warnings.push(`comment ${r.id} was already resolved — response skipped`);
       }
 
+      setPending(false);
       setReport(report);
     } catch (err) {
       onNotice(String(err));
@@ -151,36 +161,24 @@ export function HandoffControls({
     return () => window.removeEventListener("keydown", onKey);
   }, [modalOpen]);
 
-  const outcomeLabel = (o: EditOutcome): string => {
-    switch (o.status) {
-      case "applied":
-        return "applied";
-      case "fuzzy":
-        return o.errors > 0 ? `applied (fuzzy, ${o.errors} differences)` : "applied (rewrapped)";
-      case "ambiguous":
-        return `not applied — matches ${o.occurrences} places`;
-      case "failed":
-        return `not applied — ${o.reason}`;
-    }
-  };
-
-  const failures = report?.edits.filter(
-    (e) => e.outcome.status === "ambiguous" || e.outcome.status === "failed",
-  );
-
   return (
     <>
+      {awaitingReply && (
+        <span className="rl-handoff-waiting" title="A handoff prompt was copied — the next step is pasting the assistant's reply">
+          waiting for your assistant's reply
+        </span>
+      )}
       <button
         className="rl-handoff-btn"
         onClick={() => void copyHandoff()}
         title="Copy the document and open comments as a prompt for any AI chat"
       >
-        copy for AI
+        {awaitingReply ? "copy again" : "copy for AI"}
       </button>
       <button
-        className="rl-handoff-btn"
+        className={`rl-handoff-btn${awaitingReply ? " rl-handoff-btn-next" : ""}`}
         onClick={() => setModalOpen(true)}
-        title="Paste the assistant's reply to apply its edits and proposals"
+        title="Paste the assistant's reply to apply its revision and responses"
       >
         paste reply
       </button>
@@ -195,16 +193,16 @@ export function HandoffControls({
                 <textarea
                   className="rl-handoff-input"
                   autoFocus
-                  placeholder="Paste the full reply here — redline picks out the edit blocks and resolution notes."
+                  placeholder="Paste the assistant's full reply — redline reads its comment responses and the revised document."
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
                 />
                 {parsed && (
                   <div className="rl-handoff-summary">
                     <span>
-                      {parsed.edits.length} edit{parsed.edits.length === 1 ? "" : "s"} ·{" "}
-                      {parsed.resolutions.length} resolution
-                      {parsed.resolutions.length === 1 ? "" : "s"}
+                      {parsed.documents.length} revised document
+                      {parsed.documents.length === 1 ? "" : "s"} · {parsed.responses.length}{" "}
+                      comment response{parsed.responses.length === 1 ? "" : "s"}
                     </span>
                     {parsed.warnings.map((w, i) => (
                       <div key={i} className="rl-handoff-warning">
@@ -219,7 +217,7 @@ export function HandoffControls({
                     disabled={
                       applying ||
                       !parsed ||
-                      (parsed.edits.length === 0 && parsed.resolutions.length === 0)
+                      (parsed.documents.length === 0 && parsed.responses.length === 0)
                     }
                     onClick={() => void applyReply()}
                   >
@@ -235,28 +233,22 @@ export function HandoffControls({
                 <h3 className="rl-handoff-title">Reply applied</h3>
                 <div className="rl-handoff-report">
                   <p>
-                    {report.edits.filter((e) => e.outcome.status === "applied" || e.outcome.status === "fuzzy").length}{" "}
-                    of {report.edits.length} edits applied · {report.proposals} proposal
-                    {report.proposals === 1 ? "" : "s"} now awaiting your review
+                    {report.updated.length === 0
+                      ? "No documents changed"
+                      : `Updated ${report.updated.join(", ")}`}
+                    {report.unchanged.length > 0 &&
+                      ` · ${report.unchanged.join(", ")} came back identical`}{" "}
+                    · {report.proposals} response{report.proposals === 1 ? "" : "s"} now awaiting
+                    your review
                   </p>
-                  {failures && failures.length > 0 && (
-                    <ul className="rl-handoff-failures">
-                      {failures.map((e, i) => (
-                        <li key={i}>
-                          <code>{e.search.length > 60 ? e.search.slice(0, 60) + "…" : e.search}</code>{" "}
-                          — {outcomeLabel(e.outcome)}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {report.skipped.map((w, i) => (
+                  {report.warnings.map((w, i) => (
                     <div key={i} className="rl-handoff-warning">
                       ⚠ {w}
                     </div>
                   ))}
                   <p className="rl-handoff-hint">
-                    Edited documents show a <strong>● changes</strong> button — review the diff
-                    there, and accept or reply to each proposal on its card.
+                    Updated documents show a <strong>● changes</strong> button — review the diff
+                    there, and accept or reply to each response on its card.
                   </p>
                 </div>
                 <div className="rl-handoff-actions">

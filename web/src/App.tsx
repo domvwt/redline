@@ -527,6 +527,27 @@ export function App() {
         currentPath={path}
         onOpen={(p) => void openFile(p)}
         onOpenResult={openSearchResult}
+        onRemove={
+          STATIC_MODE && api.deleteDoc
+            ? (p) => {
+                if (!window.confirm(`Remove ${p} and its comments from this browser?`)) return;
+                if (pathRef.current === p) {
+                  // removal discards the doc — a pending autosave must not
+                  // race the delete and resurrect it
+                  if (saveTimer.current) {
+                    clearTimeout(saveTimer.current);
+                    saveTimer.current = null;
+                  }
+                  updateSaveState("saved");
+                  closeFile();
+                }
+                api
+                  .deleteDoc!(p)
+                  .then(refreshTree)
+                  .catch((e) => showError(String(e)));
+              }
+            : undefined
+        }
       />
 
       <main className="rl-main">
@@ -621,10 +642,19 @@ export function App() {
           <div className="rl-welcome">
             <h2>redline</h2>
             <p>Pick a document on the left, highlight prose, and leave comments.</p>
-            <p className="rl-welcome-hint">
-              You can also drop a markdown file anywhere in this window, or paste markdown
-              straight from your clipboard — it's saved into the docs folder and opened.
-            </p>
+            {STATIC_MODE ? (
+              <p className="rl-welcome-hint">
+                Drop a markdown file anywhere in this window, or paste markdown straight from
+                your clipboard, to bring your own document in. When you've left comments,
+                <em> copy for AI</em> hands them to any AI chat — and <em>paste reply</em>{" "}
+                brings its revision back for your review. Everything stays in your browser.
+              </p>
+            ) : (
+              <p className="rl-welcome-hint">
+                You can also drop a markdown file anywhere in this window, or paste markdown
+                straight from your clipboard — it's saved into the docs folder and opened.
+              </p>
+            )}
           </div>
         )}
       </main>

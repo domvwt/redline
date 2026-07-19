@@ -55,6 +55,8 @@ export interface RedlineApi {
     },
   ): Promise<Annotation>;
   deleteComment(id: string, path: string): Promise<{ ok: true }>;
+  /** browser store only: remove a document, its comments, and its baseline */
+  deleteDoc?(path: string): Promise<{ ok: true }>;
 }
 
 export type SubscribeEvents = (handlers: {
