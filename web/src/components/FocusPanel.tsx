@@ -146,7 +146,9 @@ export function FocusPanel({
       ) : (
         <p className="rl-card-body">{a.body.value}</p>
       )}
+      {/* keyed so edit state can't leak onto another comment's replies */}
       <ReplyThread
+        key={a.id}
         replies={a.replies}
         onEditReply={(i, t) => onEditReply(a.id, entry.isProject, i, t)}
       />

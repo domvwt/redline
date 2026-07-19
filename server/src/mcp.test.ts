@@ -86,6 +86,20 @@ describe("stdio MCP surface", () => {
     expect(JSON.parse(textOf(result))).toHaveLength(0);
   });
 
+  it("resolve_comment refuses a comment the author already resolved", async () => {
+    const sidecar = await loadSidecar(root, "guide.md");
+    sidecar.annotations[0].status = "resolved";
+    await saveSidecar(root, "guide.md", sidecar);
+    const result = await client.callTool({
+      name: "resolve_comment",
+      arguments: { path: "guide.md", id: "c1", action: "resolved", note: "late" },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/already resolved/);
+    // the author's close survives untouched
+    expect((await loadSidecar(root, "guide.md")).annotations[0].status).toBe("resolved");
+  });
+
   it("resolve_comment rejects path traversal", async () => {
     const result = await client.callTool({
       name: "resolve_comment",

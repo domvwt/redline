@@ -59,6 +59,11 @@ export function startWatcher(docs: DocStore, hub: EventHub): FSWatcher {
       if (/\.(md|markdown)$/i.test(rel)) {
         // tree refresh; if the doc is open, the client's refetch will 404 and surface it
         hub.broadcast({ type: "doc:changed", path: rel, hash: "", source: "external" });
+      } else if (rel.startsWith(".redline/comments/") && rel.endsWith(".json")) {
+        // sidecar deleted externally (rm, git clean) — the file is gone, so
+        // sidecarDocPath falls back to the filename decode
+        const docRel = await sidecarDocPath(p);
+        if (docRel) hub.broadcast({ type: "comments:changed", path: docRel });
       }
     });
   };

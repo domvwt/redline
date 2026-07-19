@@ -16,6 +16,16 @@ export class DocStore {
     return abs;
   }
 
+  /** Resolve to the canonical root-relative path (rejecting traversal), so
+   *  aliases like './a.md' or 'b/../a.md' cannot address a second sidecar
+   *  file or lock key for the same document. */
+  canonical(relPath: string): string {
+    const abs = this.resolve(relPath);
+    const rel = path.relative(path.resolve(this.root), abs).split(path.sep).join("/");
+    if (!rel) throw new PathError(`not a document path: ${relPath}`);
+    return rel;
+  }
+
   /** Like resolve, but also refuses symlinks that point outside the root. */
   async resolveReal(relPath: string): Promise<string> {
     const abs = this.resolve(relPath);

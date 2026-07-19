@@ -10,6 +10,7 @@ import { listOpenComments, resolveComment } from "./comments-service.ts";
 import { DocStore } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { buildApp } from "./routes.ts";
+import { startWatcher } from "./watcher.ts";
 
 const DOC = `# Guide
 
@@ -522,6 +523,112 @@ describe("review-pass regressions", () => {
 
   it("plaintext emits no leading separator for no-output first blocks", () => {
     expect(markdownToPlainText("---\n\nHello")).toBe("Hello");
+  });
+
+  it("rejects requests with a non-local host (DNS rebinding)", async () => {
+    const res = await app.request("http://evil.example:5175/api/tree");
+    expect(res.status).toBe(403);
+    const ok = await app.request("http://127.0.0.1:5175/api/tree");
+    expect(ok.status).toBe(200);
+  });
+
+  it("resolveComment refuses to demote an author-resolved comment", async () => {
+    const ann = await createComment("lazy dog", "just noting this");
+    await api("PATCH", `/api/comments/${ann.id}`, {
+      path: "guide.md",
+      status: "resolved",
+      resolutionNote: "handled it myself",
+    });
+    await expect(
+      resolveComment(docs, hub, { path: "guide.md", id: ann.id, action: "resolved", note: "late" }),
+    ).rejects.toThrow(/already resolved/);
+    const sidecar = (await api("GET", "/api/comments?path=guide.md")).json as Sidecar;
+    const stored = sidecar.annotations.find((a) => a.id === ann.id)!;
+    expect(stored.status).toBe("resolved");
+    expect(stored.resolution).toEqual({ action: "resolved", note: "handled it myself" });
+  });
+
+  it("aliased paths ('./guide.md') address the canonical sidecar", async () => {
+    const plain = markdownToPlainText(DOC);
+    const start = plain.indexOf("lazy dog");
+    const quote = makeQuoteSelector(plain, start, start + 8);
+    const res = await api("POST", "/api/comments", {
+      path: "./guide.md",
+      body: "via alias",
+      selector: {
+        quote: { exact: quote.exact, prefix: quote.prefix, suffix: quote.suffix },
+        position: { start, end: start + 8 },
+      },
+    });
+    expect(res.status).toBe(201);
+    const direct = (await api("GET", "/api/comments?path=guide.md")).json as Sidecar;
+    expect(direct.annotations).toHaveLength(1);
+    const alias = (await api("GET", "/api/comments?path=sub/../guide.md")).json as Sidecar;
+    expect(alias.annotations).toHaveLength(1);
+    // exactly one sidecar file — no alias key was created
+    const listing = await fs.readdir(path.join(root, ".redline", "comments"));
+    expect(listing).toEqual(["guide.md.json"]);
+  });
+
+  it("serves /api/file with anti-sniff and sandbox headers", async () => {
+    await fs.writeFile(
+      path.join(root, "pic.svg"),
+      "<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>",
+    );
+    const res = await app.request("/api/file?path=pic.svg");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/svg+xml");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+
+  it("creating a comment re-anchors stale siblings before certifying docHash", async () => {
+    const sibling = await createComment("second paragraph", "watch this");
+    // doc edited while the daemon was down — no watcher re-anchor ran
+    const edited = "An intro line.\n\n" + DOC;
+    await fs.writeFile(path.join(root, "guide.md"), edited);
+    const plain = markdownToPlainText(edited);
+    const start = plain.indexOf("final paragraph");
+    const quote = makeQuoteSelector(plain, start, start + 15);
+    const { json: doc } = await api("GET", "/api/doc?path=guide.md");
+    await api("POST", "/api/comments", {
+      path: "guide.md",
+      body: "fresh comment",
+      baseHash: (doc as { hash: string }).hash,
+      selector: {
+        quote: { exact: quote.exact, prefix: quote.prefix, suffix: quote.suffix },
+        position: { start, end: start + 15 },
+      },
+    });
+    const sidecar = (await api("GET", "/api/comments?path=guide.md")).json as Sidecar;
+    // docHash is certified, but only after the sibling was re-anchored
+    expect(sidecar.docHash).toBe((doc as { hash: string }).hash);
+    const stored = sidecar.annotations.find((a) => a.id === sibling.id)!;
+    expect(
+      plain.slice(stored.target!.selector[1].start, stored.target!.selector[1].end),
+    ).toBe("second paragraph");
+  });
+
+  it("deleting a sidecar file broadcasts comments:changed", async () => {
+    await createComment("lazy dog", "to be wiped");
+    const watcher = startWatcher(docs, hub);
+    await new Promise<void>((resolve) => watcher.on("ready", () => resolve()));
+    events.length = 0;
+    await fs.rm(path.join(root, ".redline", "comments", "guide.md.json"));
+    try {
+      await expect
+        .poll(
+          () =>
+            events.some((e) => {
+              const ev = e as { type: string; path?: string };
+              return ev.type === "comments:changed" && ev.path === "guide.md";
+            }),
+          { timeout: 3000 },
+        )
+        .toBe(true);
+    } finally {
+      await watcher.close();
+    }
   });
 
   it("tree badge counts orphaned comments as actionable", async () => {

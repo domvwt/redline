@@ -44,7 +44,6 @@ export function App() {
   const saveStateRef = useRef<SaveState>("saved");
   const draftRef = useRef<Draft | null>(null);
   const modeRef = useRef<Mode>("review");
-  saveStateRef.current = saveState;
   pathRef.current = path;
   draftRef.current = draft;
   modeRef.current = mode;
@@ -52,10 +51,20 @@ export function App() {
   const dirtyEpoch = useRef(0); // bumped on every keystroke; guards save-state clobber
   const commentsSeq = useRef(0); // guards out-of-order comment refetches
   const submittingComment = useRef(false);
+  const saveInFlight = useRef<Promise<void> | null>(null);
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // the ref must track synchronously — async flows (flush-before-switch,
+  // single-flight save, resync deferral) read it before React re-renders
+  const updateSaveState = useCallback((s: SaveState) => {
+    saveStateRef.current = s;
+    setSaveState(s);
+  }, []);
 
   const showError = useCallback((message: string) => {
     setError(message);
-    setTimeout(() => setError(null), 5000);
+    if (errorTimer.current) clearTimeout(errorTimer.current);
+    errorTimer.current = setTimeout(() => setError(null), 5000);
   }, []);
 
   const refreshTree = useCallback(() => {
@@ -89,6 +98,67 @@ export function App() {
     [applyAnnotations, showError],
   );
 
+  /** Save the doc the edit belonged to; abort if the user has switched files. */
+  const save = useCallback(
+    async (forPath: string): Promise<void> => {
+      // single-flight: a second PUT while one is in flight would 409 against
+      // our own write — wait for it, then save again only if still dirty
+      while (saveInFlight.current) {
+        await saveInFlight.current;
+        if (saveStateRef.current === "saved" || pathRef.current !== forPath) return;
+      }
+      const editor = editorRef.current;
+      if (!editor || pathRef.current !== forPath) return;
+      const markdown = editor.getMarkdown();
+      if (markdown === null) return; // editor not ready — never save "" over a doc
+      const epochAtSave = dirtyEpoch.current;
+      updateSaveState("saving");
+      const run = (async () => {
+        try {
+          const { hash } = await api.putDoc({
+            path: forPath,
+            markdown,
+            baseHash: baseHashRef.current,
+            anchors: editor.getAnchors(),
+          });
+          if (pathRef.current !== forPath) return;
+          baseHashRef.current = hash;
+          // keystrokes typed while the PUT was in flight keep the doc dirty
+          if (dirtyEpoch.current === epochAtSave) {
+            updateSaveState("saved");
+            setChanged(false); // own edits advance the reviewed baseline
+          }
+        } catch (err) {
+          if (pathRef.current !== forPath) return;
+          const conflict = err instanceof ApiError && err.status === 409;
+          if (conflict) {
+            // the file changed on disk underneath us — external edits win
+            const doc = await api.getDoc(forPath).catch(() => null);
+            if (doc) {
+              baseHashRef.current = doc.hash;
+              editor.setContent(doc.markdown);
+              updateSaveState("saved");
+              setChanged(doc.changed);
+              void refreshComments(forPath);
+              showError("Document changed on disk — reloaded.");
+              return;
+            }
+          }
+          // anything else: keep the user's edits, retry on next change
+          updateSaveState("dirty");
+          showError(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+      saveInFlight.current = run;
+      try {
+        await run;
+      } finally {
+        saveInFlight.current = null;
+      }
+    },
+    [refreshComments, showError, updateSaveState],
+  );
+
   const openFile = useCallback(
     async (p: string) => {
       // a pending autosave for the PREVIOUS doc must never fire once the
@@ -97,6 +167,10 @@ export function App() {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
       }
+      // flush unsaved edits while the previous editor is still mounted —
+      // switching would otherwise silently discard them
+      const prev = pathRef.current;
+      if (prev && saveStateRef.current !== "saved") await save(prev);
       try {
         const doc = await api.getDoc(p);
         baseHashRef.current = doc.hash;
@@ -107,13 +181,13 @@ export function App() {
         setDraft(null);
         setView("editor");
         setChanged(doc.changed);
-        setSaveState("saved");
+        updateSaveState("saved");
       } catch (err) {
         pendingScroll.current = null; // never carry a scroll target to another doc
         showError(String(err));
       }
     },
-    [showError],
+    [save, showError, updateSaveState],
   );
 
   const openSearchResult = useCallback(
@@ -129,64 +203,17 @@ export function App() {
     [openFile],
   );
 
-  /** Save the doc the edit belonged to; abort if the user has switched files. */
-  const save = useCallback(
-    async (forPath: string) => {
-      const editor = editorRef.current;
-      if (!editor || pathRef.current !== forPath) return;
-      const markdown = editor.getMarkdown();
-      if (markdown === null) return; // editor not ready — never save "" over a doc
-      const epochAtSave = dirtyEpoch.current;
-      setSaveState("saving");
-      try {
-        const { hash } = await api.putDoc({
-          path: forPath,
-          markdown,
-          baseHash: baseHashRef.current,
-          anchors: editor.getAnchors(),
-        });
-        if (pathRef.current !== forPath) return;
-        baseHashRef.current = hash;
-        // keystrokes typed while the PUT was in flight keep the doc dirty
-        if (dirtyEpoch.current === epochAtSave) {
-          setSaveState("saved");
-          setChanged(false); // own edits advance the reviewed baseline
-        }
-      } catch (err) {
-        if (pathRef.current !== forPath) return;
-        const conflict = err instanceof ApiError && err.status === 409;
-        if (conflict) {
-          // the file changed on disk underneath us — external edits win
-          const doc = await api.getDoc(forPath).catch(() => null);
-          if (doc) {
-            baseHashRef.current = doc.hash;
-            editor.setContent(doc.markdown);
-            setSaveState("saved");
-            setChanged(doc.changed);
-            void refreshComments(forPath);
-            showError("Document changed on disk — reloaded.");
-            return;
-          }
-        }
-        // anything else: keep the user's edits, retry on next change
-        setSaveState("dirty");
-        showError(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [refreshComments, showError],
-  );
-
   const onDirty = useCallback(() => {
     // the document is read-only in Review mode: any content change there is
     // programmatic (external reload) and must never echo back as a save
     if (modeRef.current === "review") return;
     dirtyEpoch.current++;
-    setSaveState("dirty");
+    updateSaveState("dirty");
     const p = pathRef.current;
     if (!p) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => void save(p), 800);
-  }, [save]);
+  }, [save, updateSaveState]);
 
   // initial load + SSE
   useEffect(() => {
@@ -195,6 +222,12 @@ export function App() {
     const resyncCurrentDoc = () => {
       const p = pathRef.current;
       if (!p) return;
+      // while our own PUT is in flight the disk hash legitimately differs
+      // from baseHashRef — resyncing now would clobber the pending write
+      if (saveStateRef.current === "saving") {
+        void saveInFlight.current?.then(resyncCurrentDoc);
+        return;
+      }
       void api
         .getDoc(p)
         .then((doc) => {
@@ -202,7 +235,7 @@ export function App() {
           if (doc.hash !== baseHashRef.current) {
             baseHashRef.current = doc.hash;
             editorRef.current?.setContent(doc.markdown);
-            setSaveState("saved");
+            updateSaveState("saved");
             // an external change invalidates any in-progress selection/draft
             setDraft(null);
             editorRef.current?.setDraft(null);
@@ -234,7 +267,7 @@ export function App() {
       },
     });
     return unsubscribe;
-  }, [refreshTree, refreshComments, refreshProjectNotes, showError]);
+  }, [refreshTree, refreshComments, refreshProjectNotes, showError, updateSaveState]);
 
   // Import documents dragged onto the window or pasted outside any input.
   useEffect(() => {
@@ -271,9 +304,15 @@ export function App() {
     const onDrop = (e: DragEvent) => {
       dragDepth = 0;
       setDragging(false);
-      const files = Array.from(e.dataTransfer?.files ?? []).filter(looksLikeDoc);
-      if (!files.length) return;
+      if (!e.dataTransfer?.files.length) return;
+      // always cancel a file drop — the browser's default is to navigate
+      // the tab to the dropped file, replacing the app
       e.preventDefault();
+      const files = Array.from(e.dataTransfer.files).filter(looksLikeDoc);
+      if (!files.length) {
+        showError("Only markdown or plain-text files can be imported.");
+        return;
+      }
       void importFiles(files);
     };
     const onPaste = (e: ClipboardEvent) => {
@@ -302,6 +341,18 @@ export function App() {
       window.removeEventListener("paste", onPaste);
     };
   }, [openFile, showError]);
+
+  // closing or refreshing the tab inside the autosave debounce would
+  // silently drop the pending edits — warn instead
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (saveStateRef.current === "saved") return;
+      e.preventDefault();
+      e.returnValue = ""; // some engines still require returnValue to prompt
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
 
   const onSelectText = useCallback((info: SelectionInfo | null) => {
     if (modeRef.current === "edit") return;
@@ -393,10 +444,10 @@ export function App() {
       setDraft(null);
       setView("editor");
       setChanged(false);
-      setSaveState("saved");
+      updateSaveState("saved");
       baseHashRef.current = "";
     });
-  }, [save]);
+  }, [save, updateSaveState]);
 
   const annotations = sidecar?.annotations ?? [];
 

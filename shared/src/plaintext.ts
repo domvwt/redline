@@ -31,7 +31,10 @@ const BLOCK_TYPES = new Set([
  * - images contribute their alt text
  */
 export function markdownToPlainText(markdown: string): string {
-  const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as MdNode;
+  // Normalize CRLF / lone CR up front: the editor's OffsetIndex can never emit
+  // \r, so leaving it in would drift every offset on CRLF-authored docs.
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  const tree = unified().use(remarkParse).use(remarkGfm).parse(normalized) as MdNode;
   let out = "";
 
   const newline = () => {

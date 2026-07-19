@@ -74,9 +74,20 @@ const IMAGE_MIME: Record<string, string> = {
 export function buildApp(docs: DocStore, hub: EventHub): Hono {
   const app = new Hono();
 
-  const guardPath = (relPath: string) => {
-    if (relPath !== PROJECT_PATH) docs.resolve(relPath);
-  };
+  // DNS-rebinding guard: the loopback bind stops direct remote connections,
+  // but a hostile page whose DNS rebinds to 127.0.0.1 would be same-origin
+  // with every route. The request URL's host comes from the Host header.
+  app.use("*", async (c, next) => {
+    const host = new URL(c.req.url).hostname;
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") {
+      return c.json({ error: "forbidden host" }, 403);
+    }
+    return next();
+  });
+
+  // canonicalized so aliases ('./a.md') hit the same sidecar and lock key
+  const guardPath = (relPath: string): string =>
+    relPath === PROJECT_PATH ? relPath : docs.canonical(relPath);
 
   app.onError((err, c) => {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
@@ -203,24 +214,34 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
     return c.body(new Uint8Array(data), 200, {
       "content-type": IMAGE_MIME[ext],
       "cache-control": "no-cache",
+      // an SVG is an active document when navigated to; sandboxing the
+      // response keeps its scripts out of the daemon origin (<img> rendering
+      // is unaffected — image fetches never execute the document)
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox",
     });
   });
 
   app.get("/api/comments", async (c) => {
     const relPath = c.req.query("path");
     if (!relPath) return c.json({ error: "path required" }, 400);
-    guardPath(relPath);
-    return c.json(await loadSidecar(docs.root, relPath));
+    return c.json(await loadSidecar(docs.root, guardPath(relPath)));
   });
 
   app.post("/api/comments", async (c) => {
     const body = createCommentSchema.parse(await c.req.json());
-    guardPath(body.path);
-    if (body.path === PROJECT_PATH && body.selector) {
+    const relPath = guardPath(body.path);
+    if (relPath === PROJECT_PATH && body.selector) {
       return c.json({ error: "project notes cannot be anchored" }, 400);
     }
-    return withSidecarLock(body.path, async () => {
-      const sidecar = await loadSidecar(docs.root, body.path);
+    if (relPath !== PROJECT_PATH && body.selector) {
+      // siblings may carry stale position hints (doc edited while the daemon
+      // was down); re-anchor them so the docHash certification below cannot
+      // vouch for offsets never checked against the current content
+      await reanchorFile(docs, relPath, hub);
+    }
+    return withSidecarLock(relPath, async () => {
+      const sidecar = await loadSidecar(docs.root, relPath);
       const now = new Date().toISOString();
       const annotation: Annotation = {
         id: randomUUID().slice(0, 12),
@@ -239,15 +260,15 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
         resolution: null,
       };
       sidecar.annotations.push(annotation);
-      if (body.path !== PROJECT_PATH && body.selector) {
+      if (relPath !== PROJECT_PATH && body.selector) {
         // only certify position hints when the selector was computed against
         // the content currently on disk
-        const { hash } = await docs.read(body.path);
+        const { hash } = await docs.read(relPath);
         if (body.baseHash === hash) sidecar.docHash = hash;
         else if (sidecar.docHash === hash) sidecar.docHash = "";
       }
-      await saveSidecar(docs.root, body.path, sidecar);
-      hub.broadcast({ type: "comments:changed", path: body.path });
+      await saveSidecar(docs.root, relPath, sidecar);
+      hub.broadcast({ type: "comments:changed", path: relPath });
       return c.json(annotation, 201);
     });
   });
@@ -255,17 +276,17 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   app.patch("/api/comments/:id", async (c) => {
     const id = c.req.param("id");
     const body = patchCommentSchema.parse(await c.req.json());
-    guardPath(body.path);
+    const relPath = guardPath(body.path);
     if (body.reply) {
       const annotation = await addAuthorReply(docs, hub, {
-        path: body.path,
+        path: relPath,
         id,
         text: body.reply,
       });
       return c.json(annotation);
     }
-    return withSidecarLock(body.path, async () => {
-      const sidecar = await loadSidecar(docs.root, body.path);
+    return withSidecarLock(relPath, async () => {
+      const sidecar = await loadSidecar(docs.root, relPath);
       const annotation = sidecar.annotations.find((a) => a.id === id);
       if (!annotation) return c.json({ error: "comment not found" }, 404);
       if (body.body !== undefined) annotation.body.value = body.body;
@@ -302,11 +323,11 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
           });
           annotation.resolution = null;
         }
-        if (wasClosed && annotation.target && body.path !== PROJECT_PATH) {
+        if (wasClosed && annotation.target && relPath !== PROJECT_PATH) {
           // reanchor passes skip resolved/addressed comments while advancing
           // docHash, so a reopened comment's position hints may be falsely
           // certified
-          const { markdown } = await docs.read(body.path);
+          const { markdown } = await docs.read(relPath);
           reanchorAnnotation(markdownToPlainText(markdown), annotation);
         }
       }
@@ -320,17 +341,17 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
         annotation.status = "open";
       }
       touchAnnotation(annotation);
-      await saveSidecar(docs.root, body.path, sidecar);
-      hub.broadcast({ type: "comments:changed", path: body.path });
+      await saveSidecar(docs.root, relPath, sidecar);
+      hub.broadcast({ type: "comments:changed", path: relPath });
       return c.json(annotation);
     });
   });
 
   app.delete("/api/comments/:id", async (c) => {
     const id = c.req.param("id");
-    const relPath = c.req.query("path");
-    if (!relPath) return c.json({ error: "path required" }, 400);
-    guardPath(relPath);
+    const rawPath = c.req.query("path");
+    if (!rawPath) return c.json({ error: "path required" }, 400);
+    const relPath = guardPath(rawPath);
     return withSidecarLock(relPath, async () => {
       const sidecar = await loadSidecar(docs.root, relPath);
       const before = sidecar.annotations.length;

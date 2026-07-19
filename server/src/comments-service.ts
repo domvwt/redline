@@ -25,14 +25,15 @@ export interface OpenComment {
   lastResolution: { action: ResolutionAction; note: string } | null;
 }
 
-function guardPath(docs: DocStore, relPath: string): void {
-  if (relPath !== PROJECT_PATH) docs.resolve(relPath); // traversal guard
+function guardPath(docs: DocStore, relPath: string): string {
+  // canonicalized so aliases ('./a.md') hit the same sidecar and lock key
+  return relPath === PROJECT_PATH ? relPath : docs.canonical(relPath);
 }
 
 /** Open + orphaned comments (incl. document and project notes). */
 export async function listOpenComments(docs: DocStore, relPath?: string): Promise<OpenComment[]> {
   const paths = relPath
-    ? [relPath]
+    ? [guardPath(docs, relPath)]
     : [PROJECT_PATH, ...(await listMarkdownFiles(docs.root)).map((e) => e.path)];
   const out: OpenComment[] = [];
   for (const p of paths) {
@@ -62,19 +63,27 @@ export async function resolveComment(
   hub: EventHub,
   args: { path: string; id: string; action: ResolutionAction; note: string },
 ): Promise<Annotation> {
-  guardPath(docs, args.path);
-  return withSidecarLock(args.path, async () => {
-    const sidecar = await loadSidecar(docs.root, args.path);
+  const relPath = guardPath(docs, args.path);
+  return withSidecarLock(relPath, async () => {
+    const sidecar = await loadSidecar(docs.root, relPath);
     const annotation = sidecar.annotations.find((a) => a.id === args.id);
-    if (!annotation) throw new NotFoundError(`comment not found: ${args.id} in ${args.path}`);
+    if (!annotation) throw new NotFoundError(`comment not found: ${args.id} in ${relPath}`);
+    // the author's close is final — a stale resolve (author accepted while
+    // Claude was still working) must not reopen their verdict
+    if (annotation.status === "resolved") {
+      throw new Error(
+        `comment ${args.id} was already resolved by the author; nothing to do. ` +
+          `Run list_comments for the current queue.`,
+      );
+    }
     // Claude proposes, the author disposes: both resolve and decline land in
     // "addressed" — the note stays visible in the UI until the author accepts
     // (→ resolved) or rejects with a reply (→ open).
     annotation.status = "addressed";
     annotation.resolution = { action: args.action, note: args.note };
     touchAnnotation(annotation);
-    await saveSidecar(docs.root, args.path, sidecar);
-    hub.broadcast({ type: "comments:changed", path: args.path });
+    await saveSidecar(docs.root, relPath, sidecar);
+    hub.broadcast({ type: "comments:changed", path: relPath });
     return annotation;
   });
 }
@@ -90,11 +99,11 @@ export async function addAuthorReply(
   hub: EventHub,
   args: { path: string; id: string; text: string },
 ): Promise<Annotation> {
-  guardPath(docs, args.path);
-  return withSidecarLock(args.path, async () => {
-    const sidecar = await loadSidecar(docs.root, args.path);
+  const relPath = guardPath(docs, args.path);
+  return withSidecarLock(relPath, async () => {
+    const sidecar = await loadSidecar(docs.root, relPath);
     const annotation = sidecar.annotations.find((a) => a.id === args.id);
-    if (!annotation) throw new NotFoundError(`comment not found: ${args.id} in ${args.path}`);
+    if (!annotation) throw new NotFoundError(`comment not found: ${args.id} in ${relPath}`);
     const wasClosed = annotation.status === "resolved" || annotation.status === "addressed";
     const now = new Date().toISOString();
     annotation.replies = annotation.replies ?? [];
@@ -109,13 +118,13 @@ export async function addAuthorReply(
     }
     annotation.replies.push({ by: "author", text: args.text, at: now });
     if (wasClosed) annotation.status = "open";
-    if (wasClosed && annotation.target && args.path !== PROJECT_PATH) {
-      const { markdown } = await docs.read(args.path);
+    if (wasClosed && annotation.target && relPath !== PROJECT_PATH) {
+      const { markdown } = await docs.read(relPath);
       reanchorAnnotation(markdownToPlainText(markdown), annotation);
     }
     touchAnnotation(annotation);
-    await saveSidecar(docs.root, args.path, sidecar);
-    hub.broadcast({ type: "comments:changed", path: args.path });
+    await saveSidecar(docs.root, relPath, sidecar);
+    hub.broadcast({ type: "comments:changed", path: relPath });
     return annotation;
   });
 }

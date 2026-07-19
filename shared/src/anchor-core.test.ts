@@ -90,6 +90,73 @@ describe("resolveAnchor", () => {
     const r = resolveAnchor(edited, ann);
     expect(edited.slice(r!.start, r!.end)).toBe("jumps over");
   });
+
+  it("prefers a contextful fuzzy site over a verbatim copy with alien context", () => {
+    const original = [
+      "Intro paragraph with some setup text.",
+      "The final answer is 42, which we computed carefully.",
+      "Closing remarks go here.",
+    ].join("\n");
+    const start = original.indexOf("answer is 42");
+    const ann = annotationFor(original, start, start + 12);
+    // the annotated passage is lightly edited, and a note elsewhere quotes
+    // the OLD wording verbatim — the copy must not steal the anchor
+    const edited =
+      original.replace("answer is 42", "answer is 43") + "\nNote: answer is 42 was wrong.";
+    const r = resolveAnchor(edited, ann);
+    expect(r?.method).toBe("fuzzy");
+    expect(edited.slice(r!.start, r!.end)).toBe("answer is 43");
+  });
+
+  it("keeps the exact match when no fuzzy candidate has strong context", () => {
+    // same verbatim copy, but the true site is deleted outright: the copy is
+    // the only plausible home, so the exact tier must still win
+    const original = [
+      "Intro paragraph with some setup text.",
+      "The final answer is 42, which we computed carefully.",
+      "Closing remarks go here.",
+    ].join("\n");
+    const start = original.indexOf("answer is 42");
+    const ann = annotationFor(original, start, start + 12);
+    const edited =
+      original.replace("The final answer is 42, which we computed carefully.\n", "") +
+      "\nNote: answer is 42 was wrong.";
+    const r = resolveAnchor(edited, ann);
+    expect(r?.method).toBe("exact");
+    expect(edited.slice(r!.start, r!.end)).toBe("answer is 42");
+  });
+
+  it("rescues the true site when a decoy has fewer fuzzy errors but wrong context", () => {
+    const doc = [
+      "Alpha section: the quick brown fox ends here.",
+      "Filler paragraph to keep the two sites well apart.",
+      "Omega section: the quick brown fox ends there.",
+    ].join("\n");
+    // annotate the SECOND occurrence
+    const first = doc.indexOf("the quick brown fox");
+    const second = doc.indexOf("the quick brown fox", first + 1);
+    const ann = annotationFor(doc, second, second + 19);
+    // both occurrences edited: the decoy gets ONE error, the true site TWO —
+    // a minimum-error-only search would only ever see the decoy
+    const edited = doc
+      .replace("Alpha section: the quick brown fox", "Alpha section: the quick brwn fox")
+      .replace("Omega section: the quick brown fox", "Omega section: the qwick brown fx");
+    const r = resolveAnchor(edited, ann);
+    expect(r?.method).toBe("fuzzy");
+    expect(edited.slice(r!.start, r!.end)).toBe("the qwick brown fx");
+  });
+
+  it("snaps fuzzy match boundaries so surrogate pairs never split", () => {
+    const original = "abc \u{1F600}";
+    const ann = annotationFor(original, 0, original.length);
+    const edited = "abc \u{1F601}";
+    const r = resolveAnchor(edited, ann);
+    expect(r?.method).toBe("fuzzy");
+    const slice = edited.slice(r!.start, r!.end);
+    // must not end on a lone high surrogate (or start on a lone low one)
+    expect(/[\uD800-\uDBFF]$/.test(slice)).toBe(false);
+    expect(/^[\uDC00-\uDFFF]/.test(slice)).toBe(false);
+  });
 });
 
 describe("markdownToPlainText", () => {
@@ -111,5 +178,14 @@ describe("markdownToPlainText", () => {
     const md = "The **quick brown** fox jumps.";
     const text = markdownToPlainText(md);
     expect(text).toContain("The quick brown fox jumps.");
+  });
+
+  it("normalizes CRLF and lone CR so \\r never reaches the text domain", () => {
+    // the editor's OffsetIndex only ever emits \n — the server must agree
+    expect(markdownToPlainText("line one\r\nline two")).toBe(
+      markdownToPlainText("line one\nline two"),
+    );
+    expect(markdownToPlainText("para one\r\n\r\npara two")).toBe("para one\npara two");
+    expect(markdownToPlainText("a\rb")).toBe("a\nb");
   });
 });

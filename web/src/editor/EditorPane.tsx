@@ -10,6 +10,7 @@ import { gfm } from "@milkdown/kit/preset/gfm";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { history } from "@milkdown/kit/plugin/history";
 import { $prose, getMarkdown, replaceAll } from "@milkdown/kit/utils";
+import type { Node as PmNode } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { resolveAnchor, type Annotation } from "@redline/shared";
 import { commentsKey, createCommentsPlugin, type CommentRange } from "./commentsPlugin.ts";
@@ -57,10 +58,12 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
   const rootRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const viewRef = useRef<EditorView | null>(null);
-  // Milkdown's listener plugin debounces `updated` by ~200ms, so suppression
-  // of programmatic content replacement must be a time window, not a flag
-  // cleared on the next tick.
-  const suppressDirtyUntil = useRef(0);
+  // Programmatic content replacement (external reload) must not echo back as
+  // a user edit. Milkdown's listener debounces `updated` by ~200ms, so we
+  // can't clear a flag on the next tick; instead we snapshot the doc that
+  // setContent installed and suppress only when `updated` reports exactly
+  // that doc — a keystroke in the window changes the doc and is never lost.
+  const suppressDoc = useRef<PmNode | null>(null);
 
   // Callbacks live in refs so the plugin (created once) sees fresh ones.
   const callbacks = useRef({ onReady, onDirty, onSelectText, onClickComment });
@@ -77,8 +80,10 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
       .config((ctx) => {
         ctx.set(rootCtx, rootRef.current!);
         ctx.set(defaultValueCtx, initialMarkdown);
-        ctx.get(listenerCtx).updated(() => {
-          if (Date.now() >= suppressDirtyUntil.current) callbacks.current.onDirty();
+        ctx.get(listenerCtx).updated((_ctx, doc) => {
+          const suppressed = suppressDoc.current?.eq(doc) ?? false;
+          suppressDoc.current = null;
+          if (!suppressed) callbacks.current.onDirty();
         });
       })
       .use(commonmark)
@@ -158,9 +163,10 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
     setContent(markdown: string) {
       const editor = editorRef.current;
       if (!editor) return;
-      // cover the listener's debounce with generous margin
-      suppressDirtyUntil.current = Date.now() + 600;
       editor.action(replaceAll(markdown));
+      // snapshot AFTER the replace so the suppressed doc is exactly what the
+      // listener will report if no user edit follows
+      suppressDoc.current = viewRef.current?.state.doc ?? null;
     },
     getMarkdown() {
       const editor = editorRef.current;

@@ -9,6 +9,18 @@ export interface AnchorResult {
 
 const CONTEXT_LEN = 32;
 
+// Cross-tier arbitration: an exact hit whose context agrees on at least this
+// many chars is trusted outright. Below that, a fuzzy candidate may compete —
+// but only wins with strong context of its own plus a clear score margin, so
+// the default (exact wins) holds whenever the evidence is ambiguous.
+const EXACT_TRUST_CONTEXT = 8;
+const STRONG_CONTEXT = 16;
+const DIVERT_MARGIN = 8;
+// One fuzzy error costs the same as this many chars of context agreement.
+const ERROR_COST = 4;
+// Extra fuzzy-search passes with prior matches masked out (see fuzzyCandidates).
+const FUZZY_ROUNDS = 3;
+
 export function makeQuoteSelector(
   plainText: string,
   start: number,
@@ -60,6 +72,51 @@ function findAllExact(haystack: string, needle: string): number[] {
   return out;
 }
 
+interface Candidate {
+  start: number;
+  end: number;
+  errors: number;
+}
+
+/** True if index i falls between the two halves of a surrogate pair. */
+function splitsSurrogatePair(text: string, i: number): boolean {
+  if (i <= 0 || i >= text.length) return false;
+  const hi = text.charCodeAt(i - 1);
+  const lo = text.charCodeAt(i);
+  return hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff;
+}
+
+/**
+ * approx-string-match only ever returns matches at the globally minimal error
+ * count, so a lightly-garbled decoy can eclipse the true site when the true
+ * site carries one more error but perfect context. Re-run the search with
+ * prior matches masked out so next-best candidates surface too, letting
+ * pickBest weigh errors against context agreement.
+ */
+function fuzzyCandidates(plainText: string, exact: string, maxErrors: number): Candidate[] {
+  const out: Candidate[] = [];
+  let hay = plainText;
+  for (let round = 0; round < FUZZY_ROUNDS; round++) {
+    const matches = search(hay, exact, maxErrors);
+    if (matches.length === 0) break;
+    for (const m of matches) {
+      // approx-string-match can return degenerate matches for short quotes;
+      // require the match to retain most of the quote
+      if (m.end - m.start >= exact.length * 0.5) {
+        // never split a surrogate pair: snap boundaries outward to code points
+        let start = m.start;
+        let end = m.end;
+        while (splitsSurrogatePair(plainText, start)) start--;
+        while (splitsSurrogatePair(plainText, end)) end++;
+        out.push({ start, end, errors: m.errors });
+      }
+      // mask the span either way so the next round surfaces new candidates
+      hay = hay.slice(0, m.start) + "\u0000".repeat(m.end - m.start) + hay.slice(m.end);
+    }
+  }
+  return out;
+}
+
 /**
  * Resolve an annotation's anchor against the current plain text.
  *
@@ -70,6 +127,12 @@ function findAllExact(haystack: string, needle: string): number[] {
  *  3. fuzzy search (approx-string-match) with an error budget proportional
  *     to quote length, disambiguated the same way
  *  4. null -> caller marks the annotation orphaned
+ *
+ * Tiers 2 and 3 are not strictly sequential: an exact hit with poor context
+ * agreement may be a verbatim copy of the old wording elsewhere in the doc
+ * (common in review notes), so the fuzzy tier then competes for the
+ * lightly-edited true site — but it only wins with decisively stronger
+ * context evidence; when in doubt, exact wins.
  */
 export function resolveAnchor(
   plainText: string,
@@ -89,39 +152,51 @@ export function resolveAnchor(
   }
 
   const pickBest = (
-    candidates: Array<{ start: number; end: number }>,
-    method: "exact" | "fuzzy",
-  ): AnchorResult | null => {
-    if (candidates.length === 0) return null;
-    let best = candidates[0];
-    let bestScore = -Infinity;
+    candidates: Candidate[],
+  ): { start: number; end: number; context: number; score: number } | null => {
+    let best: { start: number; end: number; context: number; score: number } | null = null;
     for (const c of candidates) {
-      let score = contextScore(plainText, c.start, c.end, quote) * 1000;
+      const context = contextScore(plainText, c.start, c.end, quote);
+      // errors trade off against context agreement at a fixed exchange rate
+      let score = (context - c.errors * ERROR_COST) * 1000;
       // tie-break: prefer candidates near the stale position hint
       score -= Math.abs(c.start - position.start) / Math.max(plainText.length, 1);
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
-      }
+      if (!best || score > best.score) best = { start: c.start, end: c.end, context, score };
     }
-    return { start: best.start, end: best.end, method };
+    return best;
   };
 
   const exactHits = findAllExact(plainText, exact).map((s) => ({
     start: s,
     end: s + exact.length,
+    errors: 0,
   }));
-  const exactResult = pickBest(exactHits, "exact");
-  if (exactResult) return exactResult;
+  const bestExact = pickBest(exactHits);
+
+  // An exact hit with decent context agreement (or all the context there is,
+  // for quotes near a doc edge) wins outright.
+  const contextAvailable = quote.prefix.length + quote.suffix.length;
+  if (bestExact && bestExact.context >= Math.min(EXACT_TRUST_CONTEXT, contextAvailable)) {
+    return { start: bestExact.start, end: bestExact.end, method: "exact" };
+  }
 
   // short quotes get a tight budget — a 4-char quote with 4 allowed errors
   // would "match" almost anywhere
   const maxErrors =
     exact.length <= 8 ? 1 : Math.min(Math.max(4, Math.ceil(exact.length * 0.2)), 32);
-  const fuzzyHits = search(plainText, exact, maxErrors)
-    // approx-string-match can return degenerate matches for short quotes;
-    // require the match to retain most of the quote
-    .filter((m) => m.end - m.start >= exact.length * 0.5)
-    .map((m) => ({ start: m.start, end: m.end }));
-  return pickBest(fuzzyHits, "fuzzy");
+  const bestFuzzy = pickBest(fuzzyCandidates(plainText, exact, maxErrors));
+
+  if (bestExact) {
+    // conservative: exact still wins unless the fuzzy candidate carries both
+    // strong absolute context and a decisive score margin
+    if (
+      bestFuzzy &&
+      bestFuzzy.context >= Math.min(STRONG_CONTEXT, contextAvailable) &&
+      bestFuzzy.score >= bestExact.score + DIVERT_MARGIN * 1000
+    ) {
+      return { start: bestFuzzy.start, end: bestFuzzy.end, method: "fuzzy" };
+    }
+    return { start: bestExact.start, end: bestExact.end, method: "exact" };
+  }
+  return bestFuzzy ? { start: bestFuzzy.start, end: bestFuzzy.end, method: "fuzzy" } : null;
 }
