@@ -12,6 +12,11 @@ comments — the way a human reviewer marks up a draft. Your agent picks the
 comments up, edits the files, and proposes resolutions. The browser updates
 live as it works.
 
+**No local agent? [Try the web version](https://domvwt.github.io/redline/)** —
+nothing to install, documents stay in your browser, and the agent leg is a
+copy/paste round-trip with any AI chat (ChatGPT, Copilot, Gemini, Claude).
+See [The web version](#the-web-version-no-install) below.
+
 ## Setup
 
 **The easy way**: tell your agent (Claude Code, Cowork, …) to do the setup:
@@ -188,6 +193,30 @@ checkout`, another editor — re-anchors your comments against the new text,
 and pushes both the document and comment positions to the browser. Anchoring
 is quote-based with fuzzy matching, so comments survive edits around and even
 *inside* their passage; only a genuinely deleted passage unanchors.
+
+## The web version (no install)
+
+[domvwt.github.io/redline](https://domvwt.github.io/redline/) is the same
+review UI with the daemon swapped out: documents, comments, and history live
+in your browser (IndexedDB — nothing is uploaded anywhere), and instead of a
+local agent editing files, you round-trip through any AI chat:
+
+1. Drop or paste a markdown document in, review it, leave comments.
+2. **copy for AI** (in the status bar) puts a self-contained prompt on your
+   clipboard: the document, your comments with their quoted passages, and
+   exact instructions for how to reply. Paste it into ChatGPT, Microsoft
+   Copilot, Gemini, Claude — any assistant.
+3. **paste reply** brings the assistant's answer back: redline picks out the
+   edit blocks and resolution notes, applies the edits (fuzzy-matched, so
+   slightly mangled quotes still land), and marks each comment *awaiting
+   your review* with the assistant's note attached.
+4. From there it's the normal workflow: review the diff under **● changes**,
+   and `accept` or `reply` on each card.
+
+The lifecycle rules are identical to the daemon version — the assistant only
+ever proposes; closing a comment stays yours. Everything is per-browser: use
+the daemon version when you want real files, git, and a hands-on-keyboard
+agent.
 
 ## For developers
 

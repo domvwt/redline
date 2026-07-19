@@ -858,3 +858,60 @@ pre code,
   border-radius: 0;
   font-size: 100%;
 }
+
+/* ---------- handoff (static web build) ---------- */
+.rl-handoff-btn {
+  border: 1px solid var(--accent);
+  background: none;
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 2px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 8px;
+}
+.rl-handoff-btn:hover { background: var(--accent); color: #fff; }
+.rl-handoff-panel { display: flex; flex-direction: column; gap: 12px; }
+.rl-handoff-title { margin: 0; font-size: 15px; color: var(--text); }
+.rl-handoff-input {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--text);
+}
+.rl-handoff-summary { font-size: 12.5px; color: var(--muted); }
+.rl-handoff-warning { color: #8a6d1f; margin-top: 4px; font-size: 12.5px; }
+.rl-handoff-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.rl-handoff-apply {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rl-handoff-apply:disabled { opacity: 0.4; cursor: default; }
+.rl-handoff-cancel {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rl-handoff-report { font-size: 13px; line-height: 1.55; }
+.rl-handoff-report p { margin: 0 0 8px; }
+.rl-handoff-failures { margin: 0 0 8px; padding-left: 18px; }
+.rl-handoff-failures code { font-size: 11.5px; background: var(--panel); padding: 1px 4px; border-radius: 4px; }
+.rl-handoff-hint { color: var(--muted); font-size: 12.5px; }

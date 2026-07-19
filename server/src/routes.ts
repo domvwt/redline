@@ -4,14 +4,20 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { markdownToPlainText, PROJECT_PATH } from "@redline/shared";
-import type { Annotation } from "@redline/shared";
+import {
+  applyAuthorPatch,
+  certifyPositionHints,
+  markdownToPlainText,
+  newAnnotation,
+  PatchError,
+  PROJECT_PATH,
+} from "@redline/shared";
 import { reanchorAnnotation, reanchorFile } from "./anchoring.ts";
 import { addAuthorReply, NotFoundError } from "./comments-service.ts";
 import { DocStore, hashOf, PathError } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { loadBaseline, saveBaseline } from "./reviewed.ts";
-import { loadSidecar, saveSidecar, touchAnnotation, withSidecarLock } from "./sidecar.ts";
+import { loadSidecar, saveSidecar, withSidecarLock } from "./sidecar.ts";
 import { listMarkdownFiles } from "./tree.ts";
 
 const selectorSchema = z.object({
@@ -242,30 +248,13 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
     }
     return withSidecarLock(relPath, async () => {
       const sidecar = await loadSidecar(docs.root, relPath);
-      const now = new Date().toISOString();
-      const annotation: Annotation = {
-        id: randomUUID().slice(0, 12),
-        created: now,
-        modified: now,
-        body: { type: "TextualBody", value: body.body },
-        target: body.selector
-          ? {
-              selector: [
-                { type: "TextQuoteSelector", ...body.selector.quote },
-                { type: "TextPositionSelector", ...body.selector.position },
-              ],
-            }
-          : null,
-        status: "open",
-        resolution: null,
-      };
+      const annotation = newAnnotation(randomUUID().slice(0, 12), body.body, body.selector ?? null);
       sidecar.annotations.push(annotation);
       if (relPath !== PROJECT_PATH && body.selector) {
         // only certify position hints when the selector was computed against
         // the content currently on disk
         const { hash } = await docs.read(relPath);
-        if (body.baseHash === hash) sidecar.docHash = hash;
-        else if (sidecar.docHash === hash) sidecar.docHash = "";
+        certifyPositionHints(sidecar, hash, body.baseHash);
       }
       await saveSidecar(docs.root, relPath, sidecar);
       hub.broadcast({ type: "comments:changed", path: relPath });
@@ -289,58 +278,19 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
       const sidecar = await loadSidecar(docs.root, relPath);
       const annotation = sidecar.annotations.find((a) => a.id === id);
       if (!annotation) return c.json({ error: "comment not found" }, 404);
-      if (body.body !== undefined) annotation.body.value = body.body;
-      if (body.editReply) {
-        const target = annotation.replies?.[body.editReply.index];
-        if (!target) return c.json({ error: "reply not found" }, 404);
-        if (target.by !== "author") {
-          return c.json({ error: "only your own replies can be edited" }, 400);
+      let needsReanchor: boolean;
+      try {
+        needsReanchor = applyAuthorPatch(annotation, body).reanchor;
+      } catch (err) {
+        if (err instanceof PatchError) {
+          return c.json({ error: err.message }, err.message === "reply not found" ? 404 : 400);
         }
-        target.text = body.editReply.text;
+        throw err;
       }
-      if (body.status === "resolved") {
-        const acceptingProposal = annotation.status === "addressed";
-        annotation.status = "resolved";
-        if (!acceptingProposal) {
-          // author closing a comment themselves is not a Claude resolution —
-          // only record one when there's an actual note to attribute.
-          // (Accepting an "addressed" proposal keeps Claude's note instead.)
-          annotation.resolution = body.resolutionNote
-            ? { action: "resolved", note: body.resolutionNote }
-            : null;
-        }
-      } else if (body.status === "open") {
-        const wasClosed = annotation.status === "resolved" || annotation.status === "addressed";
-        annotation.status = "open";
-        if (annotation.resolution) {
-          // rejected/reopened proposals become thread history, not lost notes
-          annotation.replies = annotation.replies ?? [];
-          annotation.replies.push({
-            by: "claude",
-            text: annotation.resolution.note,
-            at: annotation.modified,
-            action: annotation.resolution.action,
-          });
-          annotation.resolution = null;
-        }
-        if (wasClosed && annotation.target && relPath !== PROJECT_PATH) {
-          // reanchor passes skip resolved/addressed comments while advancing
-          // docHash, so a reopened comment's position hints may be falsely
-          // certified
-          const { markdown } = await docs.read(relPath);
-          reanchorAnnotation(markdownToPlainText(markdown), annotation);
-        }
+      if (needsReanchor && relPath !== PROJECT_PATH) {
+        const { markdown } = await docs.read(relPath);
+        reanchorAnnotation(markdownToPlainText(markdown), annotation);
       }
-      if (body.selector) {
-        annotation.target = {
-          selector: [
-            { type: "TextQuoteSelector", ...body.selector.quote },
-            { type: "TextPositionSelector", ...body.selector.position },
-          ],
-        };
-        annotation.status = "open";
-      }
-      touchAnnotation(annotation);
       await saveSidecar(docs.root, relPath, sidecar);
       hub.broadcast({ type: "comments:changed", path: relPath });
       return c.json(annotation);

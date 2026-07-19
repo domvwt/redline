@@ -125,9 +125,7 @@ function migrateLegacyReplies(sidecar: Sidecar): void {
   }
 }
 
-export function touchAnnotation(a: Annotation): void {
-  a.modified = new Date().toISOString();
-}
+export { touchAnnotation } from "@redline/shared";
 
 /** Ensure `.redline/` is git-ignored when the docs root sits anywhere inside a
  *  repo (the root itself is often a docs/ subdirectory). */

@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { makeQuoteSelector, PROJECT_PATH } from "@redline/shared";
 import type { Annotation, Sidecar, TreeEntry } from "@redline/shared";
-import { api, ApiError, subscribeEvents, type SearchResult } from "./api.ts";
+import { api, ApiError, STATIC_MODE, subscribeEvents, type SearchResult } from "./api.ts";
 import { CommentPopover } from "./components/CommentPopover.tsx";
 import { CommentSidebar } from "./components/CommentSidebar.tsx";
 import { DiffView } from "./components/DiffView.tsx";
 import { FileTree } from "./components/FileTree.tsx";
 import { FocusPanel, type FocusEntry } from "./components/FocusPanel.tsx";
 import { EditorPane, type EditorHandle, type SelectionInfo } from "./editor/EditorPane.tsx";
+
+// the static build's copy/paste agent leg; daemon bundles never load the chunk
+const HandoffControls = lazy(() => import("./components/HandoffControls.tsx"));
 
 type SaveState = "saved" | "dirty" | "saving";
 type Mode = "review" | "edit";
@@ -754,6 +757,11 @@ export function App() {
             >
               focus mode
             </button>
+          )}
+          {STATIC_MODE && (
+            <Suspense fallback={null}>
+              <HandoffControls currentPath={path} onNotice={showError} />
+            </Suspense>
           )}
         </div>
       )}
