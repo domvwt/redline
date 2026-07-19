@@ -599,7 +599,8 @@ body {
   margin-bottom: 8px;
 }
 .rl-focus-head .rl-addressed-mark,
-.rl-focus-head .rl-orphan-mark { margin: 0; }
+.rl-focus-head .rl-orphan-mark,
+.rl-focus-head .rl-resolved-mark { margin: 0; }
 .rl-focus-nav {
   margin-left: auto;
   display: flex;
