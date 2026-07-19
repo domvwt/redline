@@ -410,19 +410,19 @@ export function App() {
     focusComment(stepList[next].id);
   };
 
-  // focus mode walks EVERYTHING still needing attention: project notes,
-  // document notes, then anchored comments in document order
+  // focus mode can open ANY comment — resolved included — in a stable order:
+  // project notes, document notes, then anchored comments by position. The
+  // review count and auto-advance still track only what needs attention.
   const needsAttention = (a: Annotation) => a.status !== "resolved";
   const focusEntries: FocusEntry[] = [
-    ...projectAnnotations.filter(needsAttention).map((a) => ({ annotation: a, isProject: true })),
+    ...projectAnnotations.map((a) => ({ annotation: a, isProject: true })),
+    ...annotations.filter((a) => !a.target).map((a) => ({ annotation: a, isProject: false })),
     ...annotations
-      .filter((a) => !a.target && needsAttention(a))
-      .map((a) => ({ annotation: a, isProject: false })),
-    ...annotations
-      .filter((a) => a.target && needsAttention(a))
+      .filter((a) => a.target)
       .sort((a, b) => a.target!.selector[1].start - b.target!.selector[1].start)
       .map((a) => ({ annotation: a, isProject: false })),
   ];
+  const reviewEntries = focusEntries.filter((e) => needsAttention(e.annotation));
   const focusNavigate = (next: number) => {
     setFocusIdx(next);
     const entry = focusEntries[next];
@@ -435,17 +435,14 @@ export function App() {
   };
   const enterFocusMode = () => {
     setFocusMode(true);
-    const idx = focusEntries.findIndex((e) => e.annotation.id === focusedId);
-    focusNavigate(idx === -1 ? 0 : idx);
+    const focusedIdx = focusEntries.findIndex((e) => e.annotation.id === focusedId);
+    const firstReview = focusEntries.findIndex((e) => needsAttention(e.annotation));
+    focusNavigate(focusedIdx !== -1 ? focusedIdx : Math.max(firstReview, 0));
   };
-  // clicking a sidebar card opens it in focus mode; resolved cards (not in
-  // the review queue) fall back to plain highlight-focus
+  // clicking any sidebar card — resolved ones included — opens it in focus mode
   const openCardInFocus = (id: string) => {
     const idx = focusEntries.findIndex((e) => e.annotation.id === id);
-    if (idx === -1) {
-      focusComment(id);
-      return;
-    }
+    if (idx === -1) return;
     setFocusMode(true);
     focusNavigate(idx);
   };
@@ -611,12 +608,28 @@ export function App() {
           index={focusIdx}
           onNavigate={focusNavigate}
           onClose={() => setFocusMode(false)}
-          onAccept={(id, isProject) => {
+          onMarkResolved={(id, isProject) => {
             const p = commentPath(isProject);
             if (p)
               void api
                 .patchComment(id, { path: p, status: "resolved" })
                 .catch((e) => showError(String(e)));
+          }}
+          onReopen={(id, isProject) => {
+            const p = commentPath(isProject);
+            if (p)
+              void api
+                .patchComment(id, { path: p, status: "open" })
+                .catch((e) => showError(String(e)));
+          }}
+          onDelete={(id, isProject) => {
+            const p = commentPath(isProject);
+            if (p) void api.deleteComment(id, p).catch((e) => showError(String(e)));
+          }}
+          onEdit={(id, isProject, text) => {
+            const p = commentPath(isProject);
+            if (p)
+              void api.patchComment(id, { path: p, body: text }).catch((e) => showError(String(e)));
           }}
           onReply={(id, isProject, text) => {
             const p = commentPath(isProject);
@@ -651,7 +664,7 @@ export function App() {
       )}
 
       {error && <div className="rl-toast">{error}</div>}
-      {focusEntries.length > 0 && (
+      {reviewEntries.length > 0 && (
         <div className="rl-statusbar">
           {path && stepList.length > 0 && (
             <button className="rl-step" onClick={() => stepTo(-1)} title="Previous comment">
@@ -659,11 +672,11 @@ export function App() {
             </button>
           )}
           <span
-            title={`${focusEntries.filter((e) => !e.isProject).length} in this document · ${
-              focusEntries.filter((e) => e.isProject).length
+            title={`${reviewEntries.filter((e) => !e.isProject).length} in this document · ${
+              reviewEntries.filter((e) => e.isProject).length
             } project-wide`}
           >
-            {focusEntries.length} to review
+            {reviewEntries.length} to review
           </span>
           {path && stepList.length > 0 && (
             <button className="rl-step" onClick={() => stepTo(1)} title="Next comment">
