@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TreeEntry } from "@redline/shared";
-import { api, type SearchResult } from "../api.ts";
+import { api, STATIC_MODE, type SearchResult } from "../api.ts";
 
 interface DirNode {
   name: string;
@@ -165,7 +165,13 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove,
         </ul>
       ) : (
         <>
-          {entries.length === 0 && <p className="rl-muted">No markdown files found.</p>}
+          {entries.length === 0 && (
+            <p className="rl-muted rl-empty">
+              {STATIC_MODE
+                ? "No documents yet — drop a markdown file anywhere in this window, or paste one from your clipboard."
+                : "No markdown files found in this folder."}
+            </p>
+          )}
           <ul>{renderDir(tree, 0)}</ul>
         </>
       )}

@@ -165,26 +165,21 @@ export function HandoffControls({
 
   return (
     <>
-      {awaitingReply ? (
-        <>
-          <span className="rl-handoff-waiting">waiting for reply</span>
-          <button
-            className="rl-handoff-btn rl-handoff-primary"
-            onClick={() => setModalOpen(true)}
-            title="Paste the assistant's reply to apply its revision and responses"
-          >
-            paste reply
-          </button>
-        </>
-      ) : readyCount > 0 ? (
-        <button
-          className="rl-handoff-btn"
-          onClick={() => void copyHandoff()}
-          title="Copy your documents and open comments as a prompt for any AI chat"
-        >
-          copy for AI
-        </button>
-      ) : null}
+      <button
+        className="rl-action"
+        disabled={readyCount === 0}
+        onClick={() => void copyHandoff()}
+        title="Copy your documents and open comments as a prompt for any AI chat"
+      >
+        copy for AI ↗
+      </button>
+      <button
+        className={`rl-action${awaitingReply ? " rl-action-primary" : ""}`}
+        onClick={() => setModalOpen(true)}
+        title="Paste the assistant's reply to apply its revision and responses"
+      >
+        paste reply ↙
+      </button>
 
       {modalOpen && (
         <>

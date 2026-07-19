@@ -509,35 +509,11 @@ export function App() {
     if (focusMode && focusEntries.length === 0) setFocusMode(false);
   }, [focusMode, focusEntries.length]);
 
-  // project-wide review state + loop actions: lives in the left (project)
-  // pane. Status is text, actions are buttons.
-  const toReview =
-    tree.reduce((n, e) => n + e.openComments, 0) +
-    projectAnnotations.filter((a) => a.status !== "resolved").length;
+  // no counts in chrome — the tree badges and section headers already carry
+  // them; the handoff verbs live in the header's top-right slot (web build)
   const agentReady =
     tree.reduce((n, e) => n + e.agentReady, 0) +
     projectAnnotations.filter((a) => a.status === "open" || a.status === "orphaned").length;
-  const reviewBlock = (
-    <div className="rl-tree-review">
-      {toReview > 0 && <span className="rl-review-count">{toReview} to review</span>}
-      <div className="rl-tree-review-actions">
-        {reviewEntries.length > 0 && !focusMode && (
-          <button
-            className="rl-focus-btn"
-            onClick={enterFocusMode}
-            title="Review the open comments one at a time (Esc exits)"
-          >
-            focus mode
-          </button>
-        )}
-        {STATIC_MODE && (
-          <Suspense fallback={null}>
-            <HandoffControls currentPath={path} readyCount={agentReady} onNotice={showError} />
-          </Suspense>
-        )}
-      </div>
-    </div>
-  );
 
   return (
     <div className="rl-app">
@@ -546,7 +522,6 @@ export function App() {
         currentPath={path}
         onOpen={(p) => void openFile(p)}
         onOpenResult={openSearchResult}
-        reviewBlock={reviewBlock}
         onRemove={
           STATIC_MODE && api.deleteDoc
             ? (p) => {
@@ -592,25 +567,47 @@ export function App() {
                     ● changes
                   </button>
                 )}
+                {STATIC_MODE && (
+                  <Suspense fallback={null}>
+                    <HandoffControls
+                      currentPath={path}
+                      readyCount={agentReady}
+                      onNotice={showError}
+                    />
+                  </Suspense>
+                )}
                 <div className="rl-mode" role="group" aria-label="mode">
                   <button
-                    className={mode === "review" ? "active" : ""}
+                    className={!focusMode && mode === "review" ? "active" : ""}
                     onClick={() => {
+                      setFocusMode(false);
                       setMode("review");
                       editorRef.current?.setEditable(false);
                     }}
+                    data-label="Review"
                   >
                     Review
                   </button>
                   <button
-                    className={mode === "edit" ? "active" : ""}
+                    className={!focusMode && mode === "edit" ? "active" : ""}
                     onClick={() => {
+                      setFocusMode(false);
                       setMode("edit");
                       editorRef.current?.setEditable(true);
                       cancelDraft();
                     }}
+                    data-label="Edit"
                   >
                     Edit
+                  </button>
+                  <button
+                    className={focusMode ? "active" : ""}
+                    disabled={focusEntries.length === 0}
+                    onClick={enterFocusMode}
+                    title="Step through the comments one at a time (Esc exits)"
+                    data-label="Focus"
+                  >
+                    Focus
                   </button>
                 </div>
                 <span className={`rl-save rl-save-${saveState}`}>

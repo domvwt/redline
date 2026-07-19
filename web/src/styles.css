@@ -198,25 +198,44 @@ body {
 .rl-save-dirty, .rl-save-saving { color: var(--amber-note); }
 
 .rl-mode {
-  display: inline-flex;
+  /* equal-width segments (each as wide as the widest label) — a segmented
+     control is one instrument, not a row of label-sized buttons */
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
   background: var(--panel);
+  padding: 2px;
+  gap: 2px;
 }
 .rl-mode button {
   border: 0;
   background: none;
-  padding: 4px 12px;
+  padding: 3px 12px;
   font-size: 12.5px;
   color: var(--muted);
   cursor: pointer;
+  text-align: center;
+  /* the active segment is its own rounded pill inside the track — nothing
+     gets corner-clipped, so it stays clean at any zoom */
+  border-radius: 5px;
 }
 .rl-mode button.active {
   background: var(--paper);
   color: var(--text);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: 0 0 0 1px var(--border);
+}
+/* zero-height bold ghost of the label: every segment reserves its bold
+   width up front, so activating (bolding) one never resizes the control */
+.rl-mode button::after {
+  content: attr(data-label);
+  display: block;
+  height: 0;
+  overflow: hidden;
+  font-weight: 600;
+  visibility: hidden;
 }
 
 .rl-editor {
@@ -537,17 +556,6 @@ body {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .rl-menu button:disabled { opacity: 0.4; cursor: default; }
-.rl-focus-btn {
-  border: 1px solid var(--accent);
-  background: none;
-  color: var(--accent);
-  border-radius: 6px;
-  padding: 2px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rl-focus-btn:hover { background: var(--accent); color: #fff; }
 .rl-close-doc {
   border: none;
   background: none;
@@ -800,14 +808,15 @@ body {
 .rl-welcome-hint { font-size: 12.5px; opacity: 0.85; margin-top: 10px; }
 .rl-toast {
   position: fixed;
-  bottom: 58px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 52px;
+  left: 248px;
   background: #35322d;
   color: #fff;
   padding: 8px 16px;
   border-radius: 8px;
-  font-size: 13.5px;
+  font-size: 13px;
+  max-width: 380px;
+  box-shadow: 0 8px 24px rgba(35, 33, 29, 0.25);
   z-index: 60;
 }
 code {
@@ -832,17 +841,6 @@ pre code,
 }
 
 /* ---------- handoff (static web build) ---------- */
-.rl-handoff-btn {
-  border: 1px solid var(--accent);
-  background: none;
-  color: var(--accent);
-  border-radius: 6px;
-  padding: 2px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rl-handoff-btn:hover { background: var(--accent); color: #fff; }
 .rl-handoff-panel { display: flex; flex-direction: column; gap: 12px; }
 .rl-handoff-title { margin: 0; font-size: 15px; color: var(--text); }
 .rl-handoff-input {
@@ -917,34 +915,37 @@ pre code,
 
 .rl-handoff-recopy { margin-right: auto; order: -1; }
 
-/* ---------- project review block (left pane) ---------- */
-.rl-tree-review {
+.rl-tree .rl-empty { margin: 6px 2px 0; font-size: 12.5px; }
+
+/* ---------- review actions, floating on the canvas margin ---------- */
+.rl-main { position: relative; }
+
+.rl-canvas-actions {
+  position: absolute;
+  top: 54px;
+  right: 22px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 2px 2px 14px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  align-items: flex-end;
+  gap: 5px;
+  z-index: 20;
 }
-/* nothing to review, no handoff in flight: no block, no line */
-.rl-tree-review:not(:has(span, button)) { display: none; }
-.rl-review-count {
-  color: var(--accent);
+/* actions are quiet text on the paper — no chrome, accent on hover, and the
+   loop's single next step carries the accent at rest */
+.rl-action {
+  border: none;
+  background: none;
+  padding: 2px 0;
   font-size: 12.5px;
-  font-weight: 600;
-}
-.rl-tree-review-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.rl-handoff-waiting {
-  flex-basis: 100%;
   color: var(--muted);
-  font-size: 12px;
-  font-style: italic;
+  cursor: pointer;
+  text-align: right;
 }
-/* the one next step in the loop — the only filled button on screen */
-.rl-handoff-primary { background: var(--accent); color: #fff; }
+.rl-action:hover:not(:disabled) { color: var(--accent); }
+.rl-action:disabled { opacity: 0.45; cursor: default; }
+.rl-action-primary { color: var(--accent); font-weight: 600; }
+
+
+
+.rl-header .rl-action { font-size: 12px; }
+.rl-mode button:disabled { opacity: 0.4; cursor: default; }
