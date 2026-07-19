@@ -79,9 +79,7 @@ export function HandoffControls({
       }
       await navigator.clipboard.writeText(buildHandoffPrompt(docs, { projectNotes }));
       setPending(true);
-      onNotice(
-        `Copied ${count} comment${count === 1 ? "" : "s"} — paste into any AI chat, then bring its reply back here.`,
-      );
+      onNotice(`Copied ${count} comment${count === 1 ? "" : "s"} — paste into any AI chat.`);
     } catch (err) {
       onNotice(String(err));
     }
@@ -163,25 +161,36 @@ export function HandoffControls({
 
   return (
     <>
-      {awaitingReply && (
-        <span className="rl-handoff-waiting" title="A handoff prompt was copied — the next step is pasting the assistant's reply">
-          waiting for your assistant's reply
-        </span>
-      )}
       <button
         className="rl-handoff-btn"
         onClick={() => void copyHandoff()}
         title="Copy the document and open comments as a prompt for any AI chat"
       >
-        {awaitingReply ? "copy again" : "copy for AI"}
+        copy for AI
       </button>
       <button
-        className={`rl-handoff-btn${awaitingReply ? " rl-handoff-btn-next" : ""}`}
+        className="rl-handoff-btn"
         onClick={() => setModalOpen(true)}
         title="Paste the assistant's reply to apply its revision and responses"
       >
         paste reply
       </button>
+
+      {awaitingReply && !modalOpen && (
+        <div className="rl-flow-toast" role="status">
+          <span>waiting for your assistant's reply</span>
+          <button className="rl-flow-toast-action" onClick={() => setModalOpen(true)}>
+            paste reply
+          </button>
+          <button
+            className="rl-flow-toast-dismiss"
+            title="Dismiss — the buttons stay in the bar below"
+            onClick={() => setPending(false)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {modalOpen && (
         <>
