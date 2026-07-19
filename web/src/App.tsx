@@ -33,7 +33,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
-  const [focusIdx, setFocusIdx] = useState(0);
+  const [focusEntryId, setFocusEntryId] = useState<string | null>(null);
+  const [focusIdxFallback, setFocusIdxFallback] = useState(0); // used if the focused comment is deleted
 
   const editorRef = useRef<EditorHandle>(null);
   const baseHashRef = useRef<string>("");
@@ -410,11 +411,11 @@ export function App() {
     focusComment(stepList[next].id);
   };
 
-  // focus mode can open ANY comment — resolved included — in a stable order:
-  // project notes, document notes, then anchored comments by position. The
-  // review count and auto-advance still track only what needs attention.
+  // focus mode can open ANY comment, ordered as a queue: everything needing
+  // attention first (project notes, document notes, then anchored comments
+  // by position), resolved history as a tail in the same scope order.
   const needsAttention = (a: Annotation) => a.status !== "resolved";
-  const focusEntries: FocusEntry[] = [
+  const scopeOrdered: FocusEntry[] = [
     ...projectAnnotations.map((a) => ({ annotation: a, isProject: true })),
     ...annotations.filter((a) => !a.target).map((a) => ({ annotation: a, isProject: false })),
     ...annotations
@@ -422,11 +423,22 @@ export function App() {
       .sort((a, b) => a.target!.selector[1].start - b.target!.selector[1].start)
       .map((a) => ({ annotation: a, isProject: false })),
   ];
+  const focusEntries: FocusEntry[] = [
+    ...scopeOrdered.filter((e) => needsAttention(e.annotation)),
+    ...scopeOrdered.filter((e) => !needsAttention(e.annotation)),
+  ];
   const reviewEntries = focusEntries.filter((e) => needsAttention(e.annotation));
+  // navigation follows the COMMENT, not its list slot: statuses change while
+  // the panel is open (accepting re-sorts the card into the resolved tail),
+  // and an id survives that where an index would silently point elsewhere
+  const idxById = focusEntries.findIndex((e) => e.annotation.id === focusEntryId);
+  const focusIdx =
+    idxById !== -1 ? idxById : Math.max(0, Math.min(focusIdxFallback, focusEntries.length - 1));
   const focusNavigate = (next: number) => {
-    setFocusIdx(next);
     const entry = focusEntries[next];
     if (!entry) return;
+    setFocusEntryId(entry.annotation.id);
+    setFocusIdxFallback(next);
     if (entry.annotation.target && entry.annotation.status !== "orphaned") {
       focusComment(entry.annotation.id);
     } else {
@@ -436,8 +448,8 @@ export function App() {
   const enterFocusMode = () => {
     setFocusMode(true);
     const focusedIdx = focusEntries.findIndex((e) => e.annotation.id === focusedId);
-    const firstReview = focusEntries.findIndex((e) => needsAttention(e.annotation));
-    focusNavigate(focusedIdx !== -1 ? focusedIdx : Math.max(firstReview, 0));
+    // index 0 is the first item needing review, by construction of the order
+    focusNavigate(focusedIdx !== -1 ? focusedIdx : 0);
   };
   // clicking any sidebar card — resolved ones included — opens it in focus mode
   const openCardInFocus = (id: string) => {
