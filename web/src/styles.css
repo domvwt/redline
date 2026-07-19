@@ -615,6 +615,7 @@ body {
   color: var(--muted);
   font-weight: 600;
   padding: 0;
+  margin: 0; /* the base chip's card-context margin-bottom skews flex centring */
 }
 .rl-focus-nav {
   margin-left: auto;
