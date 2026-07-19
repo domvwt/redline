@@ -17,6 +17,8 @@ interface Props extends CommentActions {
   docPath: string | null;
   hasOpenDoc: boolean;
   focusedId: string | null;
+  /** bumped on every focus call, so re-focusing the same id still scrolls */
+  focusTick: number;
   onAddNote(scope: "document" | "project", text: string): void;
 }
 
@@ -102,14 +104,23 @@ function Section({
   title,
   total,
   unresolved,
+  containsFocused,
+  focusTick,
   children,
 }: {
   title: string;
   total: number;
   unresolved: number;
+  containsFocused: boolean;
+  focusTick: number;
   children: ReactNode;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
+  // focusing a comment (e.g. clicking its highlight) must reveal its card,
+  // even if the user had collapsed this section
+  useEffect(() => {
+    if (containsFocused) setOverride(true);
+  }, [containsFocused, focusTick]);
   const expanded = override ?? unresolved > 0;
   if (total === 0) return null;
   return (
@@ -465,6 +476,7 @@ export function CommentSidebar({
   docPath,
   hasOpenDoc,
   focusedId,
+  focusTick,
   onAddNote,
   ...actions
 }: Props) {
@@ -485,13 +497,18 @@ export function CommentSidebar({
   // keep the focused card visible when focus comes from the document or
   // stepper. Scoped to the sidebar: the editor's highlight spans carry the
   // same data-comment-id, and a document-wide query finds those first.
+  // Delayed a beat: focusing may have just auto-expanded a collapsed
+  // section, and the card only exists after that re-render.
   const asideRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!focusedId) return;
-    asideRef.current
-      ?.querySelector(`[data-comment-id="${CSS.escape(focusedId)}"]`)
-      ?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [focusedId]);
+    const t = setTimeout(() => {
+      asideRef.current
+        ?.querySelector(`[data-comment-id="${CSS.escape(focusedId)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    return () => clearTimeout(t);
+  }, [focusedId, focusTick]);
   // unresolved first (open and unanchored alike); resolved dimmed at the bottom
   const byOpenFirst = (a: Annotation, b: Annotation) =>
     (a.status === "resolved" ? 1 : 0) - (b.status === "resolved" ? 1 : 0);
@@ -524,13 +541,27 @@ export function CommentSidebar({
         title="Project"
         total={projectAnnotations.length}
         unresolved={unresolvedCount(projectAnnotations)}
+        containsFocused={projectAnnotations.some((a) => a.id === focusedId)}
+        focusTick={focusTick}
       >
         {cards(projectAnnotations, true)}
       </Section>
-      <Section title="Document" total={docNotes.length} unresolved={unresolvedCount(docNotes)}>
+      <Section
+        title="Document"
+        total={docNotes.length}
+        unresolved={unresolvedCount(docNotes)}
+        containsFocused={docNotes.some((a) => a.id === focusedId)}
+        focusTick={focusTick}
+      >
         {cards(docNotes, false)}
       </Section>
-      <Section title="Inline" total={inline.length} unresolved={unresolvedCount(inline)}>
+      <Section
+        title="Inline"
+        total={inline.length}
+        unresolved={unresolvedCount(inline)}
+        containsFocused={inline.some((a) => a.id === focusedId)}
+        focusTick={focusTick}
+      >
         {cards(inline, false)}
       </Section>
     </aside>

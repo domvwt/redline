@@ -362,8 +362,12 @@ export function App() {
     [showError],
   );
 
+  // bumps on every focus call so re-focusing the SAME comment still
+  // re-triggers the sidebar scroll (focusedId alone wouldn't change)
+  const [focusTick, setFocusTick] = useState(0);
   const focusComment = useCallback((id: string) => {
     setFocusedId(id);
+    setFocusTick((t) => t + 1);
     editorRef.current?.focusComment(id);
     editorRef.current?.scrollToComment(id);
   }, []);
@@ -557,6 +561,7 @@ export function App() {
         docPath={path}
         hasOpenDoc={path !== null}
         focusedId={focusedId}
+        focusTick={focusTick}
         onAddNote={addNote}
         onFocus={focusComment}
         onDelete={(id, isProject) => {

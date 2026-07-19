@@ -23,7 +23,7 @@ npm run build     # builds the web UI
 npm link          # puts a `redline` command on your PATH (Node's pipx-install)
 ```
 
-### Start the server
+### Start redline
 
 From your docs directory — a repo root, a `docs/` folder, anywhere with
 markdown files:
@@ -35,10 +35,11 @@ redline                 # serves the current directory and opens your browser
 redline ~/other/docs    # or point it somewhere else
 ```
 
-The address is printed and the review UI opens in your browser automatically
-(`--no-open` to skip that). `--port <n>` changes the port. The server binds
-to localhost only — nothing leaves your machine. You can also just ask your
-agent to launch it for you as a background task mid-session.
+The review UI opens in your browser automatically (`--no-open` to skip
+that), and the address is printed too. `--port <n>` changes the port.
+redline runs entirely on your computer — nothing leaves your machine. You
+can also just ask your agent to launch it for you as a background task
+mid-session.
 
 ### Connect your agent (one-time, optional)
 
@@ -58,9 +59,9 @@ claude mcp add --scope user redline -- redline mcp
 This gives the agent `list_comments` (comments with their current anchors)
 and `resolve_comment` (structured resolve/decline). The MCP client spawns
 `redline mcp` on demand in the project directory — like `backlog mcp start`,
-it works directly on the sidecar files, so it needs no running server, no
-port, and no per-project setup. If the server *is* running, its file watcher
-picks up the writes and the browser updates live.
+it works directly on the sidecar files, so it doesn't even need redline to
+be running — no port, no per-project setup. If redline *is* running, it
+notices the writes and the browser updates live.
 
 ## Using it
 
@@ -190,7 +191,7 @@ redline itself: see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
   skill both read it relative to the project root). Without MCP, ask the
   agent to read `.redline/comments/*.json` directly.
 
-* **Browser not updating live** — the live connection drops if the server
+* **Browser not updating live** — the live connection drops if redline
   restarts; refresh the page.
 
 * **A comment unanchored unexpectedly** — the passage was probably rewritten
