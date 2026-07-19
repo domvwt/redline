@@ -1,3 +1,0 @@
-A comment unanchored unexpectedly — the passage was probably rewritten wholesale (rewrites beyond ~20% of the quote defeat fuzzy matching, by design). The quote is preserved on the card; re-comment on the new text.
-
-A document renders oddly — redline renders CommonMark + GFM, the same dialect GitHub uses. Content outside it (YAML frontmatter, MDX, …) shows as literal text rather than disappearing. Also, single line breaks inside a paragraph join into flowing text — that's standard markdown, in every renderer; use a list or blank lines when you mean separate lines.
