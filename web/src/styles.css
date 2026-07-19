@@ -601,6 +601,14 @@ body {
 .rl-focus-head .rl-addressed-mark,
 .rl-focus-head .rl-orphan-mark,
 .rl-focus-head .rl-resolved-mark { margin: 0; }
+/* the scope chip is metadata here, not a call to action — no pill, just a
+   quiet label */
+.rl-focus-head .rl-chip {
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0;
+}
 .rl-focus-nav {
   margin-left: auto;
   display: flex;
