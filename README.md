@@ -3,6 +3,10 @@
 Margin comments for [markdown](https://www.markdownguide.org/getting-started/),
 built for human collaboration with AI agents.
 
+<p align="center">
+  <img src="docs/assets/hero.svg" alt="A redline window: a rendered markdown document with a highlighted passage, connected to a margin comment where an agent's proposal awaits review" width="860">
+</p>
+
 Read documents in the browser, highlight passages, and leave
 comments — the way a human reviewer marks up a draft. Your agent picks the
 comments up, edits the files, and proposes resolutions. The browser updates
@@ -102,6 +106,8 @@ Beyond passage comments:
   navigate, accepting slides the queue forward, replying advances to the
   next comment, `Esc` (or clicking outside) exits.
 
+  <img src="docs/assets/screenshot-focus.png" alt="Focus mode: one comment in a centred card over the dimmed document, with the quoted passage shown in context below the conversation">
+
 * **Changes** — after the agent edits a document, a `● changes` button appears in
   the header: a diff of everything since you last looked (your own edits don't
   count). `mark reviewed` acknowledges it.
@@ -146,6 +152,8 @@ Watch the browser while it works: prose changes appear live and each comment
 the agent finishes turns *awaiting your review* with its note attached — the
 edit is made, but the comment stays yours to close. `accept` each proposal
 (or a decline you agree with), or `reply` to send it back.
+
+<img src="docs/assets/screenshot-review.png" alt="The review UI: a rendered document with highlighted passages on the left, and comment cards on the right — one carrying an agent proposal marked awaiting your review">
 
 ### Comment lifecycle
 
@@ -193,8 +201,9 @@ redline itself: see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
   skill both read it relative to the project root). Without MCP, ask the
   agent to read `.redline/comments/*.json` directly.
 
-* **Browser not updating live** — the live connection drops if redline
-  restarts; refresh the page.
+* **Browser not updating live** — the live connection reconnects and
+  resyncs by itself, including across a redline restart. If a page somehow
+  stays stale, a refresh is never wrong.
 
 * **A comment unanchored unexpectedly** — the passage was probably rewritten
   wholesale (rewrites beyond \~20% of the quote defeat fuzzy matching, by
