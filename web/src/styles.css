@@ -384,8 +384,19 @@ body {
 }
 .rl-thread-edit:hover { color: var(--accent); text-decoration: underline; }
 .rl-card-body { margin: 0; white-space: pre-wrap; }
-.rl-resolution { margin: 8px 0 0; font-size: 12.5px; color: var(--green); line-height: 1.45; }
-.rl-resolution-declined { color: var(--amber-note); }
+/* the agent's note reads as a message, like thread entries: normal text,
+   with the speaker label and left rail carrying the who/what */
+.rl-resolution {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding-left: 9px;
+  border-left: 2px solid color-mix(in srgb, var(--green) 45%, transparent);
+}
+.rl-resolution-declined {
+  border-left-color: color-mix(in srgb, var(--amber-note) 55%, transparent);
+}
+.rl-resolution-declined .rl-thread-label { color: var(--amber-note); }
 .rl-card-actions { margin-top: 8px; display: flex; gap: 10px; }
 .rl-card-actions button {
   border: 0;
