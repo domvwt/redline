@@ -339,6 +339,13 @@ body {
   cursor: help;
 }
 .rl-card-addressed { border-color: color-mix(in srgb, var(--green) 30%, var(--border)); }
+/* text statuses sit on the card's first line, tucked right — like the dot,
+   they never interrupt the content flow */
+.rl-card .rl-orphan-mark,
+.rl-card .rl-resolved-mark {
+  float: right;
+  margin: 0 0 4px 8px;
+}
 .rl-card.focused { border-color: var(--amber-hl-border); box-shadow: 0 0 0 2px var(--amber-hl); }
 .rl-card blockquote {
   margin: 0 0 6px;

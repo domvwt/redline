@@ -246,7 +246,6 @@ function CommentCard({
           title="Awaiting your review — accept, or reply to send it back"
         />
       )}
-      {shortQuote && <blockquote>{shortQuote}</blockquote>}
       {annotation.status === "orphaned" && (
         <span
           className="rl-orphan-mark"
@@ -255,6 +254,10 @@ function CommentCard({
           unanchored
         </span>
       )}
+      {annotation.status === "resolved" && !annotation.resolution?.note && (
+        <span className="rl-resolved-mark">✓ resolved</span>
+      )}
+      {shortQuote && <blockquote>{shortQuote}</blockquote>}
       {editing ? (
         <div className="rl-reply-form" onClick={(e) => e.stopPropagation()}>
           <textarea
@@ -275,9 +278,6 @@ function CommentCard({
         replies={annotation.replies}
         onEditReply={(i, t) => actions.onEditReply(annotation.id, isProject, i, t)}
       />
-      {annotation.status === "resolved" && !annotation.resolution?.note && (
-        <span className="rl-resolved-mark">✓ resolved</span>
-      )}
       {annotation.resolution && annotation.resolution.note && (
         <p className={`rl-resolution rl-resolution-${annotation.resolution.action}`}>
           <span className="rl-thread-label">
