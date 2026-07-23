@@ -45,6 +45,13 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove,
   // two-step inline confirm for removal: first click arms, second removes,
   // leaving the row disarms — no browser alert
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
+  // the ✕ is a ~18px target: a press whose mouseup drifts a few pixels off it
+  // never produces a click, so both steps act on pointerdown instead. The
+  // pointerdown that arms re-renders this node into the confirm button before
+  // its own click event lands on it — skipClick swallows that trailing click
+  // (and the one after removal) so one press can never arm AND remove.
+  // onClick stays as the keyboard path (Enter/Space fire click only).
+  const skipClick = useRef(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,7 +109,10 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove,
         <li
           key={entry.path}
           className={onRemove ? "rl-tree-li removable" : "rl-tree-li"}
-          onMouseLeave={() => setConfirmingRemove(null)}
+          onMouseLeave={() => {
+            setConfirmingRemove(null);
+            skipClick.current = false;
+          }}
         >
           <button
             className={entry.path === currentPath ? "rl-tree-item active" : "rl-tree-item"}
@@ -118,7 +128,17 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove,
               <button
                 className="rl-tree-remove rl-tree-remove-confirm"
                 title="Click to remove — this also deletes its comments"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  skipClick.current = true;
+                  setConfirmingRemove(null);
+                  onRemove(entry.path);
+                }}
                 onClick={() => {
+                  if (skipClick.current) {
+                    skipClick.current = false;
+                    return;
+                  }
                   setConfirmingRemove(null);
                   onRemove(entry.path);
                 }}
@@ -129,7 +149,18 @@ export function FileTree({ entries, currentPath, onOpen, onOpenResult, onRemove,
               <button
                 className="rl-tree-remove"
                 title={`Remove ${entry.name} and its comments from this browser`}
-                onClick={() => setConfirmingRemove(entry.path)}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  skipClick.current = true;
+                  setConfirmingRemove(entry.path);
+                }}
+                onClick={() => {
+                  if (skipClick.current) {
+                    skipClick.current = false;
+                    return;
+                  }
+                  setConfirmingRemove(entry.path);
+                }}
               >
                 ✕
               </button>

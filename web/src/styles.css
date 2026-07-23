@@ -664,6 +664,48 @@ body {
   color: inherit;
 }
 .rl-focus-context { color: var(--muted); }
+.rl-passage-was { margin-bottom: 8px; }
+.rl-passage-was + .rl-passage-now { border-top: 1px solid var(--border); padding-top: 8px; }
+.rl-passage-tag {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-right: 8px;
+  width: 26px;
+}
+.rl-passage-was del {
+  background: #fbe7e4;
+  text-decoration: line-through;
+  text-decoration-color: #c25c4a;
+  border-radius: 2px;
+  padding: 0.12em 0;
+}
+.rl-passage-now ins {
+  background: #e3f2e6;
+  text-decoration: none;
+  border-radius: 2px;
+  padding: 0.12em 0;
+}
+.rl-anchor-lost-note {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.rl-stale-quote-mark {
+  display: block;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-top: 4px;
+}
 
 /* ---------- drag-and-drop import ---------- */
 .rl-drop-overlay {
@@ -895,12 +937,13 @@ pre code,
   color: var(--muted);
   font-size: 11px;
   line-height: 1;
-  padding: 3px 5px;
+  padding: 5px 7px;
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
 }
-.rl-tree-li:hover .rl-tree-remove { opacity: 1; }
+.rl-tree-li:hover .rl-tree-remove,
+.rl-tree-remove:focus-visible { opacity: 1; }
 .rl-tree-li.removable:hover .rl-badge { visibility: hidden; }
 .rl-tree-remove:hover { color: var(--accent); }
 .rl-tree-remove-confirm {

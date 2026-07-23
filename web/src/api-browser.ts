@@ -10,6 +10,7 @@ import {
   proposeResolution,
   reanchorAnnotation,
   reanchorAnnotations,
+  snapshotPriorQuotes,
 } from "@redline/shared";
 import type { Annotation, ServerEvent, Sidecar, TreeEntry } from "@redline/shared";
 import { ApiError, type RedlineApi, type SubscribeEvents } from "./api-types.ts";
@@ -174,10 +175,14 @@ async function saveSidecar(path: string, sidecar: Sidecar): Promise<void> {
 }
 
 /** Mirror of the daemon's reanchorFile: skip when the sidecar is already
- *  certified at the current content. */
+ *  certified at the current content. A caller that has the pre-revision
+ *  markdown passes it as `priorMarkdown`; when its hash still certifies the
+ *  sidecar's positions, diff-based span mapping survives rewrites the quote
+ *  ladder cannot find. */
 async function reanchorDoc(
   path: string,
   anchors?: Array<{ id: string; start: number; end: number }>,
+  priorMarkdown?: string,
 ): Promise<void> {
   await withLock(path, async () => {
     const sidecar = await loadSidecar(path);
@@ -185,7 +190,11 @@ async function reanchorDoc(
     const markdown = await readDoc(path);
     const hash = await hashOf(markdown);
     if (sidecar.docHash === hash && !anchors) return;
-    reanchorAnnotations(sidecar, markdownToPlainText(markdown), hash, anchors);
+    const priorPlain =
+      priorMarkdown !== undefined && (await hashOf(priorMarkdown)) === sidecar.docHash
+        ? markdownToPlainText(priorMarkdown)
+        : null;
+    reanchorAnnotations(sidecar, markdownToPlainText(markdown), hash, anchors, priorPlain);
     await saveSidecar(path, sidecar);
     emit({ type: "comments:changed", path });
   });
@@ -263,7 +272,7 @@ export const api: RedlineApi = {
     await idbPut(DOCS, path, markdown);
     // your own edits are not "changes to review" — advance the baseline
     await idbPut(BASELINES, path, markdown);
-    await reanchorDoc(path, anchors);
+    await reanchorDoc(path, anchors, current);
     return { hash: await hashOf(markdown) };
   },
 
@@ -387,8 +396,18 @@ export async function proposeFromReply(
 /** Write a document as the external "agent" would: content changes land as
  *  reviewable changes (baseline is NOT advanced) and comments re-anchor. */
 export async function writeDocAsAgent(path: string, markdown: string): Promise<void> {
+  // re-anchoring will rewrite each open comment's quote to the revised text
+  // (or orphan it) — snapshot the pre-revision passage first so the author
+  // can compare old vs new when reviewing the proposal
+  await withLock(path, async () => {
+    const sidecar = await loadSidecar(path);
+    if (snapshotPriorQuotes(sidecar)) await saveSidecar(path, sidecar);
+  });
+  // the pre-revision text drives diff-based re-anchoring — capture it before
+  // the write replaces it (absent when the agent is creating the doc)
+  const prior = await readDoc(path).catch(() => undefined);
   await idbPut(DOCS, path, markdown);
   const hash = await hashOf(markdown);
   emit({ type: "doc:changed", path, hash, source: "external" });
-  await reanchorDoc(path);
+  await reanchorDoc(path, undefined, prior);
 }

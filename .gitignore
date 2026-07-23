@@ -3,3 +3,5 @@ dist/
 dist-static/
 .redline/
 *.log
+.playwright-mcp/
+.tokensave/

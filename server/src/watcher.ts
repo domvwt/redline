@@ -57,6 +57,7 @@ export function startWatcher(docs: DocStore, hub: EventHub): FSWatcher {
     schedule(absPath, async (p) => {
       const rel = path.relative(docs.root, p).split(path.sep).join("/");
       if (/\.(md|markdown)$/i.test(rel)) {
+        docs.forget(rel);
         // tree refresh; if the doc is open, the client's refetch will 404 and surface it
         hub.broadcast({ type: "doc:changed", path: rel, hash: "", source: "external" });
       } else if (rel.startsWith(".redline/comments/") && rel.endsWith(".json")) {
@@ -79,7 +80,9 @@ export function startWatcher(docs: DocStore, hub: EventHub): FSWatcher {
         return;
       }
       if (/\.(md|markdown)$/i.test(rel)) {
-        await reanchorFile(docs, rel, hub);
+        // the watcher only sees non-own writes — this is an agent/external
+        // revision, so keep the pre-revision passages for old-vs-new review
+        await reanchorFile(docs, rel, hub, undefined, { snapshotPrior: true });
         const { markdown } = await docs.read(rel);
         hub.broadcast({ type: "doc:changed", path: rel, hash: hashOf(markdown), source: "external" });
       }

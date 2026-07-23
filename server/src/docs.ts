@@ -4,7 +4,34 @@ import path from "node:path";
 import { atomicWrite } from "./sidecar.ts";
 
 export class DocStore {
+  /** Last content read per canonical path (LRU, capped). The watcher fires
+   *  only after a file has already changed on disk, so this is the only place
+   *  the pre-revision text survives — reanchorFile diffs against it (when its
+   *  hash still certifies the sidecar's positions) to map comments through
+   *  rewrites the quote search cannot follow. Best-effort: empty after a
+   *  daemon restart, and re-anchoring then falls back to the quote ladder.
+   *  Deliberately NOT updated by write(): the author-save route reads the
+   *  current content for its conflict check before writing, and that read is
+   *  the pre-revision text the follow-up re-anchor pass needs. */
+  private lastSeenByPath = new Map<string, string>();
+  private static readonly LAST_SEEN_CAP = 64;
+
   constructor(readonly root: string) {}
+
+  lastSeen(relPath: string): string | undefined {
+    const key = this.canonical(relPath);
+    const markdown = this.lastSeenByPath.get(key);
+    if (markdown !== undefined) {
+      // refresh recency (Map iterates in insertion order)
+      this.lastSeenByPath.delete(key);
+      this.lastSeenByPath.set(key, markdown);
+    }
+    return markdown;
+  }
+
+  forget(relPath: string): void {
+    this.lastSeenByPath.delete(this.canonical(relPath));
+  }
 
   /** Resolve a repo-relative path, rejecting traversal outside the root. */
   resolve(relPath: string): string {
@@ -44,6 +71,13 @@ export class DocStore {
 
   async read(relPath: string): Promise<{ markdown: string; hash: string }> {
     const markdown = await fs.readFile(await this.resolveReal(relPath), "utf8");
+    const key = this.canonical(relPath);
+    this.lastSeenByPath.delete(key);
+    this.lastSeenByPath.set(key, markdown);
+    if (this.lastSeenByPath.size > DocStore.LAST_SEEN_CAP) {
+      const oldest = this.lastSeenByPath.keys().next().value!;
+      this.lastSeenByPath.delete(oldest);
+    }
     return { markdown, hash: hashOf(markdown) };
   }
 

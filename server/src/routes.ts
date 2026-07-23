@@ -243,8 +243,10 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
     if (relPath !== PROJECT_PATH && body.selector) {
       // siblings may carry stale position hints (doc edited while the daemon
       // was down); re-anchor them so the docHash certification below cannot
-      // vouch for offsets never checked against the current content
-      await reanchorFile(docs, relPath, hub);
+      // vouch for offsets never checked against the current content. Any
+      // drift consumed here is an external revision — keep the pre-revision
+      // passages the watcher pass would otherwise have snapshotted
+      await reanchorFile(docs, relPath, hub, undefined, { snapshotPrior: true });
     }
     return withSidecarLock(relPath, async () => {
       const sidecar = await loadSidecar(docs.root, relPath);

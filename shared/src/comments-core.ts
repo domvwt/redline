@@ -1,4 +1,5 @@
 import { makeQuoteSelector, resolveAnchor } from "./anchor-core.ts";
+import { createSpanMapper, type SpanMapper } from "./revision-map.ts";
 import type { Annotation, ResolutionAction, Sidecar } from "./types.ts";
 import { PROJECT_PATH } from "./types.ts";
 
@@ -79,6 +80,11 @@ export function proposeResolution(
         `Run list_comments for the current queue.`,
     );
   }
+  // an orphaned comment's selector still shows the pre-revision wording — the
+  // proposal freezes it (reanchor skips "addressed"), so record that the
+  // passage is gone before the orphan state is hidden behind "addressed"
+  if (annotation.status === "orphaned") annotation.anchorLost = true;
+  else delete annotation.anchorLost;
   annotation.status = "addressed";
   annotation.resolution = { action, note };
   touchAnnotation(annotation);
@@ -97,6 +103,32 @@ export function foldResolutionIntoThread(annotation: Annotation): void {
   annotation.resolution = null;
 }
 
+/** The old-vs-new comparison a snapshot supported is over — the author acted
+ *  on the comment (reopened it, or re-anchored it by hand), so the next agent
+ *  pass must snapshot afresh rather than keep an ancient comparison point. */
+function clearRevisionMarks(annotation: Annotation): void {
+  annotation.priorQuote = null;
+  delete annotation.anchorLost;
+}
+
+/**
+ * Before an agent/external revision re-anchors a document's comments, keep
+ * each workable comment's current passage so the author can compare old vs
+ * new. First snapshot wins: an agent pass may write the file several times,
+ * and the comparison must span the whole pass, not just its last write.
+ * Returns whether anything was recorded (i.e. the sidecar needs saving).
+ */
+export function snapshotPriorQuotes(sidecar: Sidecar): boolean {
+  let changed = false;
+  for (const a of sidecar.annotations) {
+    if ((a.status === "open" || a.status === "orphaned") && a.target && !a.priorQuote) {
+      a.priorQuote = { ...a.target.selector[0] };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * Author replies: any prior agent resolution folds into the thread, the reply
  * is appended, and a closed comment reopens so the agent sees it (with full
@@ -109,7 +141,12 @@ export function authorReply(annotation: Annotation, text: string): { wasClosed: 
   foldResolutionIntoThread(annotation);
   annotation.replies = annotation.replies ?? [];
   annotation.replies.push({ by: "author", text, at: new Date().toISOString() });
-  if (wasClosed) annotation.status = "open";
+  if (wasClosed) {
+    annotation.status = "open";
+    // even for a note-less self-resolve (nothing to fold): reopening ends
+    // the old-vs-new comparison, whatever closed the comment
+    clearRevisionMarks(annotation);
+  }
   touchAnnotation(annotation);
   return { wasClosed };
 }
@@ -154,6 +191,7 @@ export function applyAuthorPatch(
     const wasClosed = annotation.status === "resolved" || annotation.status === "addressed";
     annotation.status = "open";
     foldResolutionIntoThread(annotation);
+    if (wasClosed) clearRevisionMarks(annotation);
     // reanchor passes skip resolved/addressed comments while advancing
     // docHash, so a reopened comment's position hints may be falsely certified
     if (wasClosed && annotation.target) reanchor = true;
@@ -165,6 +203,9 @@ export function applyAuthorPatch(
         { type: "TextPositionSelector", ...patch.selector.position },
       ],
     };
+    // a hand-placed anchor is the author's own act — a was/now block would
+    // misattribute it to the agent
+    clearRevisionMarks(annotation);
     annotation.status = "open";
   }
   touchAnnotation(annotation);
@@ -195,14 +236,29 @@ export function reanchorAnnotation(plain: string, annotation: Annotation): void 
  * editor's live position mapping) is trusted only when it reproduces the
  * annotation's existing quote — any divergence falls back to the anchor
  * ladder, which works from the stored quote+context. Returns the orphan count.
+ *
+ * When the caller knows the exact text the stored positions refer to (it must
+ * verify hashOf(priorMarkdown) === sidecar.docHash before passing its plain
+ * text as `priorPlain`), a diff of old vs new maps each span to whatever
+ * replaced it. That tier runs only where the quote-search ladder fails: while
+ * the quote's text survives anywhere (light edit, verbatim move), the ladder's
+ * context-scored search is authoritative — a word diff aligns on shared
+ * stopwords, so it would misattribute a moved passage to whatever landed in
+ * its old spot. The mapper rescues what the ladder would orphan: full
+ * rephrasings ("my name is" → "I am called"). Spans it rejects — deleted
+ * outright, absorbed into a whole-document rewrite, or too costly to diff —
+ * stay orphaned as before, so nothing that anchored previously regresses.
  */
 export function reanchorAnnotations(
   sidecar: Sidecar,
   plain: string,
   hash: string,
   clientAnchors?: Array<{ id: string; start: number; end: number }>,
+  priorPlain?: string | null,
 ): number {
   const byId = new Map((clientAnchors ?? []).map((c) => [c.id, c]));
+  let mapSpan: SpanMapper | null = null;
+  const mapper = (): SpanMapper => (mapSpan ??= createSpanMapper(priorPlain!, plain));
   let orphans = 0;
   for (const a of sidecar.annotations) {
     // "addressed" is frozen like "resolved": demoting a pending proposal to
@@ -210,6 +266,7 @@ export function reanchorAnnotations(
     // the agent's queue. It re-anchors when the author's rejection reopens it.
     if (a.status === "resolved" || a.status === "addressed" || !a.target) continue;
     const client = byId.get(a.id);
+    const [quote, position] = a.target.selector;
     let start: number | null = null;
     let end: number | null = null;
 
@@ -227,6 +284,20 @@ export function reanchorAnnotations(
       if (result) {
         start = result.start;
         end = result.end;
+      } else if (
+        // rescue tier: the quote's text is gone, so map its stored span
+        // through the revision diff to whatever replaced it. The certified-
+        // prior gate covers the sidecar, not this annotation: its own
+        // positions may still predate the prior text (e.g. reopened after
+        // being skipped as "addressed"), so require they reproduce the quote.
+        priorPlain != null &&
+        priorPlain.slice(position.start, position.end) === quote.exact
+      ) {
+        const mapped = mapper()(position.start, position.end);
+        if (mapped) {
+          start = mapped.start;
+          end = mapped.end;
+        }
       }
     }
 

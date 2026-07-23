@@ -40,6 +40,8 @@ const annotationSchema = z.object({
       }),
     )
     .optional(),
+  priorQuote: quoteSelector.nullable().optional(),
+  anchorLost: z.boolean().optional(),
 });
 
 const sidecarSchema = z.object({

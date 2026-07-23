@@ -7,6 +7,7 @@ import {
   reanchorAnnotation,
 } from "@redline/shared";
 import type { Annotation, Reply, ResolutionAction } from "@redline/shared";
+import { reanchorFile } from "./anchoring.ts";
 import { DocStore } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { loadSidecar, saveSidecar, withSidecarLock } from "./sidecar.ts";
@@ -57,6 +58,13 @@ export async function resolveComment(
   args: { path: string; id: string; action: ResolutionAction; note: string },
 ): Promise<Annotation> {
   const relPath = guardPath(docs, args.path);
+  // an agent routinely writes the revised file and resolves the comment in
+  // the same breath, outrunning the watcher's debounce — re-anchor now
+  // (keeping pre-revision passages) so the proposal freezes the revised
+  // anchor and the author still gets the old-vs-new comparison
+  if (relPath !== PROJECT_PATH) {
+    await reanchorFile(docs, relPath, hub, undefined, { snapshotPrior: true });
+  }
   return withSidecarLock(relPath, async () => {
     const sidecar = await loadSidecar(docs.root, relPath);
     const annotation = sidecar.annotations.find((a) => a.id === args.id);

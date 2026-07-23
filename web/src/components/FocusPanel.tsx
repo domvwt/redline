@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { diffWords } from "diff";
 import type { Annotation } from "@redline/shared";
 import { ReplyThread, RichText } from "./CommentSidebar.tsx";
 
@@ -71,6 +72,10 @@ export function FocusPanel({
   const a = entry.annotation;
   const selector = a.target?.selector?.[0] ?? null;
   const quote = selector?.exact ?? null;
+  // pre-revision passage, snapshotted when the agent's revision was applied —
+  // when it differs from the live quote, show was/now instead of one passage
+  const prior = a.priorQuote ?? null;
+  const passageDiff = quote && prior && prior.exact !== quote ? diffWords(prior.exact, quote) : null;
 
   /** move to the next comment still needing a look; stay put if none */
   const advancePastCurrent = () => {
@@ -202,7 +207,54 @@ export function FocusPanel({
           <button onClick={() => onDelete(a.id, entry.isProject)}>delete</button>
         </div>
       )}
-      {quote && (
+      {a.anchorLost && quote ? (
+        <div className="rl-focus-passage">
+          <span className="rl-focus-passage-label">passage — agent's change</span>
+          <p className="rl-focus-passage-text rl-passage-was">
+            <span className="rl-passage-tag">was</span>
+            {(prior ?? selector!).prefix && (
+              <span className="rl-focus-context">…{(prior ?? selector!).prefix}</span>
+            )}
+            <del>{prior?.exact ?? quote}</del>
+            {(prior ?? selector!).suffix && (
+              <span className="rl-focus-context">{(prior ?? selector!).suffix}…</span>
+            )}
+          </p>
+          <p className="rl-anchor-lost-note">
+            This passage no longer appears in the revised document — it was rewritten beyond
+            recognition. The agent's note above says what happened; <em>changes</em> in the header
+            shows the full revision.
+          </p>
+        </div>
+      ) : passageDiff ? (
+        <div className="rl-focus-passage">
+          <span className="rl-focus-passage-label">passage — agent's change</span>
+          <p className="rl-focus-passage-text rl-passage-was">
+            <span className="rl-passage-tag">was</span>
+            {prior!.prefix && <span className="rl-focus-context">…{prior!.prefix}</span>}
+            <span>
+              {passageDiff
+                .filter((part) => !part.added)
+                .map((part, i) =>
+                  part.removed ? <del key={i}>{part.value}</del> : <span key={i}>{part.value}</span>,
+                )}
+            </span>
+            {prior!.suffix && <span className="rl-focus-context">{prior!.suffix}…</span>}
+          </p>
+          <p className="rl-focus-passage-text rl-passage-now">
+            <span className="rl-passage-tag">now</span>
+            {selector!.prefix && <span className="rl-focus-context">…{selector!.prefix}</span>}
+            <span>
+              {passageDiff
+                .filter((part) => !part.removed)
+                .map((part, i) =>
+                  part.added ? <ins key={i}>{part.value}</ins> : <span key={i}>{part.value}</span>,
+                )}
+            </span>
+            {selector!.suffix && <span className="rl-focus-context">{selector!.suffix}…</span>}
+          </p>
+        </div>
+      ) : quote ? (
         <div className="rl-focus-passage">
           <span className="rl-focus-passage-label">passage</span>
           <p className="rl-focus-passage-text">
@@ -211,7 +263,7 @@ export function FocusPanel({
             {selector!.suffix && <span className="rl-focus-context">{selector!.suffix}…</span>}
           </p>
         </div>
-      )}
+      ) : null}
     </div>
     </>
   );

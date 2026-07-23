@@ -7,7 +7,7 @@ import { markdownToPlainText, type Annotation, type Sidecar } from "@redline/sha
 import { makeQuoteSelector } from "@redline/shared";
 import { reanchorFile } from "./anchoring.ts";
 import { listOpenComments, resolveComment } from "./comments-service.ts";
-import { DocStore } from "./docs.ts";
+import { DocStore, hashOf } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { buildApp } from "./routes.ts";
 import { startWatcher } from "./watcher.ts";
@@ -133,6 +133,19 @@ describe("terminal-Claude workflow (external edits + resolution)", () => {
     ).toBe("second paragraph");
   });
 
+  it("snapshots the pre-revision passage on an external edit (watcher path)", async () => {
+    const ann = await createComment("explains the setup", "which setup?");
+    const edited = DOC.replace("explains the setup", "explains the set-up");
+    await fs.writeFile(path.join(root, "guide.md"), edited);
+    await reanchorFile(docs, "guide.md", hub, undefined, { snapshotPrior: true });
+
+    const { json } = await api("GET", "/api/comments?path=guide.md");
+    const stored = (json as Sidecar).annotations.find((a) => a.id === ann.id)!;
+    // the old wording survives for old-vs-new review; the live quote moved on
+    expect(stored.priorQuote?.exact).toBe("explains the setup");
+    expect(stored.target!.selector[0].exact).not.toBe("explains the setup");
+  });
+
   it("orphans a comment whose passage was deleted externally", async () => {
     const ann = await createComment("conclusions", "expand on this");
     const edited = DOC.replace("The final paragraph is about conclusions.\n", "");
@@ -142,6 +155,141 @@ describe("terminal-Claude workflow (external edits + resolution)", () => {
 
     const { json } = await api("GET", "/api/comments?path=guide.md");
     expect((json as Sidecar).annotations.find((a) => a.id === ann.id)!.status).toBe("orphaned");
+  });
+
+  it("follows a full rephrase via the last-seen diff when positions are certified", async () => {
+    // certified positions (baseHash matches disk) are what unlock diff mapping
+    const plain = markdownToPlainText(DOC);
+    const start = plain.indexOf("explains the setup");
+    const quote = makeQuoteSelector(plain, start, start + "explains the setup".length);
+    const { json: ann } = await api("POST", "/api/comments", {
+      path: "guide.md",
+      body: "vague — explain what setup",
+      baseHash: hashOf(DOC),
+      selector: {
+        quote: { exact: quote.exact, prefix: quote.prefix, suffix: quote.suffix },
+        position: { start, end: start + "explains the setup".length },
+      },
+    });
+
+    // agent rewrites the sentence with no words in common — the quote ladder
+    // has nothing to find and used to orphan this comment
+    const newSentence = "This part describes how everything gets configured, at length.";
+    const edited = DOC.replace(
+      "A second paragraph explains the setup in some detail.",
+      newSentence,
+    );
+    await fs.writeFile(path.join(root, "guide.md"), edited);
+    const orphans = await reanchorFile(docs, "guide.md", hub, undefined, { snapshotPrior: true });
+
+    expect(orphans).toBe(0);
+    const { json } = await api("GET", "/api/comments?path=guide.md");
+    const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
+    expect(stored.status).toBe("open");
+    expect(stored.priorQuote?.exact).toBe("explains the setup");
+    // the shared trailing "." aligns as unchanged, so it stays outside the span
+    expect(stored.target!.selector[0].exact).toBe(newSentence.slice(0, -1));
+  });
+
+  it("chains diff re-anchoring across successive review rounds", async () => {
+    // docHash re-certifies at every pass, so each round diffs against the
+    // previous round's text — the chain never reaches back to round zero
+    const plain = markdownToPlainText(DOC);
+    const start = plain.indexOf("explains the setup");
+    const quote = makeQuoteSelector(plain, start, start + "explains the setup".length);
+    const { json: ann } = await api("POST", "/api/comments", {
+      path: "guide.md",
+      body: "vague — explain what setup",
+      baseHash: hashOf(DOC),
+      selector: {
+        quote: { exact: quote.exact, prefix: quote.prefix, suffix: quote.suffix },
+        position: { start, end: start + "explains the setup".length },
+      },
+    });
+
+    // three rounds, each a full rephrase sharing no words with its predecessor
+    const rounds = [
+      "This part describes how everything gets configured, at length.",
+      "Configuration steps appear below in exhaustive depth.",
+      "Setup guidance lives here, thorough and complete.",
+    ];
+    let doc = DOC;
+    let previous = "A second paragraph explains the setup in some detail.";
+    for (const sentence of rounds) {
+      doc = doc.replace(previous, sentence);
+      await fs.writeFile(path.join(root, "guide.md"), doc);
+      const orphans = await reanchorFile(docs, "guide.md", hub, undefined, {
+        snapshotPrior: true,
+      });
+      expect(orphans).toBe(0);
+
+      const { json } = await api("GET", "/api/comments?path=guide.md");
+      const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
+      expect(stored.status).toBe("open");
+      expect(stored.target!.selector[0].exact).toBe(sentence.slice(0, -1));
+      previous = sentence;
+    }
+
+    // the pre-revision passage shown for review is still the round-one one:
+    // the author has not reviewed in between, so the comparison point holds
+    const { json } = await api("GET", "/api/comments?path=guide.md");
+    const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
+    expect(stored.priorQuote?.exact).toBe("explains the setup");
+  });
+
+  it("re-anchors and snapshots before a resolution that outruns the watcher", async () => {
+    const ann = await createComment("explains the setup", "which setup?");
+    // agent writes the file and resolves in the same breath — the watcher's
+    // debounced pass has not run yet when the resolve arrives
+    const edited = DOC.replace("explains the setup", "explains the set-up");
+    await fs.writeFile(path.join(root, "guide.md"), edited);
+    const resolved = await resolveComment(docs, hub, {
+      path: "guide.md",
+      id: ann.id,
+      action: "resolved",
+      note: "clarified which setup is meant",
+    });
+
+    expect(resolved.status).toBe("addressed");
+    // the proposal froze the revised anchor, not the stale one…
+    expect(resolved.target!.selector[0].exact).toBe("explains the set-up");
+    expect(resolved.anchorLost).toBeUndefined();
+    // …and the author still gets the old-vs-new comparison
+    expect(resolved.priorQuote?.exact).toBe("explains the setup");
+  });
+
+  it("author saves without client anchors get the diff tier too", async () => {
+    // certified comment (baseHash matches disk), like the editor produces
+    const plain = markdownToPlainText(DOC);
+    const start = plain.indexOf("explains the setup");
+    const quote = makeQuoteSelector(plain, start, start + "explains the setup".length);
+    const { json: ann } = await api("POST", "/api/comments", {
+      path: "guide.md",
+      body: "vague",
+      baseHash: hashOf(DOC),
+      selector: {
+        quote: { exact: quote.exact, prefix: quote.prefix, suffix: quote.suffix },
+        position: { start, end: start + "explains the setup".length },
+      },
+    });
+
+    // author saves a full rephrase of the commented sentence with no client
+    // anchors — the PUT route's conflict-check read is the prior text
+    const newSentence = "This part describes how everything gets configured, at length.";
+    const edited = DOC.replace("A second paragraph explains the setup in some detail.", newSentence);
+    const { status } = await api("PUT", "/api/doc", {
+      path: "guide.md",
+      markdown: edited,
+      baseHash: hashOf(DOC),
+    });
+    expect(status).toBe(200);
+
+    const { json } = await api("GET", "/api/comments?path=guide.md");
+    const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
+    expect(stored.status).toBe("open");
+    expect(stored.target!.selector[0].exact).toBe(newSentence.slice(0, -1));
+    // the author's own save is not an agent revision — no was/now snapshot
+    expect(stored.priorQuote ?? null).toBeNull();
   });
 
   it("exposes open comments and accepts resolutions via the MCP service", async () => {

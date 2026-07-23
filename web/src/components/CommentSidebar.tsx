@@ -257,7 +257,19 @@ function CommentCard({
       {annotation.status === "resolved" && !annotation.resolution?.note && (
         <span className="rl-resolved-mark">✓ resolved</span>
       )}
-      {shortQuote && <blockquote>{shortQuote}</blockquote>}
+      {shortQuote && (
+        <blockquote>
+          {shortQuote}
+          {annotation.anchorLost && (
+            <span
+              className="rl-stale-quote-mark"
+              title="This passage was rewritten beyond recognition — the quote shows the pre-revision wording"
+            >
+              pre-revision wording
+            </span>
+          )}
+        </blockquote>
+      )}
       {editing ? (
         <div className="rl-reply-form" onClick={(e) => e.stopPropagation()}>
           <textarea

@@ -50,6 +50,15 @@ export interface Annotation {
   status: AnnotationStatus;
   resolution: Resolution | null;
   replies?: Reply[];
+  /** the anchored passage as it read just before an agent revision was
+   *  applied — re-anchoring rewrites the live selector to the new text, so
+   *  this is the only place the old wording survives for review. Cleared
+   *  when the author's rejection reopens the comment. */
+  priorQuote?: TextQuoteSelector | null;
+  /** set when a proposal landed on a comment whose passage could not be
+   *  re-anchored in the revised text — the live selector still shows the OLD
+   *  wording, and the UI must not present it as current. Cleared on reopen. */
+  anchorLost?: boolean;
 }
 
 /** Pseudo-path whose sidecar holds project-wide notes. */
