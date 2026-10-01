@@ -12,17 +12,35 @@ import { history } from "@milkdown/kit/plugin/history";
 import { $prose, getMarkdown, replaceAll } from "@milkdown/kit/utils";
 import type { Node as PmNode } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
-import { resolveAnchor, type Annotation } from "@redline/shared";
-import { commentsKey, createCommentsPlugin, type CommentRange } from "./commentsPlugin.ts";
+import {
+  ALIGN_EVIDENCE,
+  PAIR_THRESHOLD,
+  blockSimilarity,
+  mapFromBaseline,
+  mapToBaseline,
+  markdownToPlainBlocks,
+  resolveAnchor,
+  type Annotation,
+  type TrackedChange,
+} from "@redline/shared";
+import { changesKey, containerAt, createChangesPlugin } from "./changesPlugin.ts";
+import {
+  commentsKey,
+  createCommentsPlugin,
+  type CommentRange,
+  type Spotlight,
+} from "./commentsPlugin.ts";
 import { createImagePlugin } from "./imagePlugin.ts";
 import { OffsetIndex } from "./offsets.ts";
 
+/** A settled text selection: plain-text offsets plus where to anchor the popover. */
 export interface SelectionInfo {
   start: number; // plain-text offsets
   end: number;
   rect: { top: number; left: number };
 }
 
+/** Imperative editor API exposed to the app via ref. */
 export interface EditorHandle {
   /** Replace content wholesale (external change from Claude/git). */
   setContent(markdown: string): void;
@@ -40,6 +58,27 @@ export interface EditorHandle {
   setDraft(range: { start: number; end: number } | null): void;
   /** Scroll to a plain-text range and flash it (search results). */
   scrollToRange(start: number, end: number): void;
+  /** Last-reviewed markdown to draw tracked changes against; null clears. */
+  setBaseline(markdown: string | null): void;
+  /** Draw or hide the tracked-change decorations (the count still updates). */
+  setShowChanges(show: boolean): void;
+  /**
+   * Focus mode: light the comment's passage (CSS dims the rest) and centre
+   * it. A passage the revision deleted is located through the baseline diff
+   * instead. Returns whether anything was lit; null clears.
+   */
+  spotlight(annotation: Annotation | null, scroll?: boolean): boolean;
+  /**
+   * Where each comment's passage is now (plain-text offsets; unknown ones
+   * are left out), and which comments re-anchoring carried off their
+   * passage — their live quote is not the agent's change.
+   */
+  positionsOf(annotations: Annotation[]): {
+    positions: Map<string, number>;
+    carried: Set<string>;
+    /** each comment's live text — what its card's "now" should read */
+    live: Map<string, string>;
+  };
 }
 
 interface Props {
@@ -49,10 +88,175 @@ interface Props {
   onDirty(): void;
   onSelectText(info: SelectionInfo | null): void;
   onClickComment(id: string): void;
+  /** number of tracked changes against the baseline, on every change */
+  onChangeCount(count: number): void;
+  /** ids of comments whose passage currently shows a drawn change */
+  onCommentsWithChanges(ids: string[]): void;
 }
 
+/**
+ * Where a comment's passage is in the current doc: its tracked range, or —
+ * for a passage the revision removed or rewrote — the change itself, found
+ * in the baseline and carried across the diff.
+ */
+function locate(view: EditorView, annotation: Annotation, index: OffsetIndex): Spotlight | null {
+  const tracked = commentsKey
+    .getState(view.state)
+    ?.ranges.find((r) => r.id === annotation.id && !r.collapsed && r.from < r.to);
+  const was = locateInBaseline(view, annotation, index);
+  if (!tracked || annotation.status === "orphaned") return was?.spot ?? null;
+  // the live range without the separators a re-anchored quote ("\n…",
+  // "…\n") can carry, which would reach into the neighbouring block
+  const rawStart = index.toText(tracked.from);
+  const raw = index.text.slice(rawStart, index.toText(tracked.to, "end"));
+  const liveStart = rawStart + (raw.length - raw.trimStart().length);
+  const liveEnd = Math.max(liveStart + 1, rawStart + raw.trimEnd().length);
+  const live = { from: index.toPm(liveStart), to: index.toPm(liveEnd) };
+  if (was?.changed) {
+    // re-anchoring can carry a comment whose words the agent changed onto
+    // matching words elsewhere. A range (judged by its middle) in untouched
+    // text away from where the passage stood was carried off; one in added
+    // text is a rewrite or move — the block that replaced the passage where
+    // it stood, or else text that reads like the passage
+    const regions = changesKey.getState(view.state)!.regions;
+    const mapped = mapToBaseline(regions, Math.floor((liveStart + liveEnd) / 2));
+    if (mapped !== null && (mapped < was.start || mapped >= was.end)) return { ...was.spot, carried: true };
+    if (mapped === null) {
+      const rep = was.replacement;
+      // inside what replaced the passage: light that rewrite — itself, not
+      // however far the re-anchored quote stretched past it
+      if (rep !== null && liveStart < rep.end && liveEnd > rep.start) {
+        const repEnd = rep.start + index.text.slice(rep.start, rep.end).trimEnd().length;
+        // with the passage's own struck text (one of several a block replaced)
+        return { from: index.toPm(rep.start), to: index.toPm(repEnd), deletion: was.spot.deletion, inline: was.spot.inline };
+      }
+      const $live = view.state.doc.resolve(live.from);
+      // a word-level change: the live range belongs in the changed paragraph
+      if (was.removedBlock === null) {
+        if ($live.start() !== was.changedBlockStart) return { ...was.spot, carried: true };
+      } else if (blockSimilarity(was.removedBlock, $live.parent.textContent) < PAIR_THRESHOLD) {
+        // not its replacement, and nothing like it: carried off
+        return { ...was.spot, carried: true };
+      }
+    }
+  }
+  return live;
+}
+
+/**
+ * The comment's passage in the baseline — an exact match of either quote
+ * preferred (a stale priorQuote may fuzzily hit something else) — and the
+ * change, if any, that removed words from it.
+ */
+function locateInBaseline(view: EditorView, annotation: Annotation, index: OffsetIndex) {
+  const changes = changesKey.getState(view.state);
+  if (!annotation.target || !changes?.baseline) return null;
+  const baseline = changes.baseline;
+  // priorQuote may predate the baseline (an earlier pass); the selector's own
+  // quote may be what the baseline still holds
+  const [quote, position] = annotation.target.selector;
+  const hits = [annotation.priorQuote, quote]
+    .filter((q) => q != null)
+    .map((q) => {
+      const found = resolveAnchor(baseline.text, {
+        ...annotation,
+        target: { ...annotation.target!, selector: [q, position] },
+      });
+      return found && { found, exact: baseline.text.slice(found.start, found.end) === q.exact };
+    })
+    .filter((h) => h !== null);
+  const hit = hits.find((h) => h.exact) ?? hits[0];
+  if (!hit) return null;
+  const { found } = hit;
+  const at = index.toPm(mapFromBaseline(changes.regions, found.start));
+  // the first drawn change that removed words from the passage
+  const region = changes.regions.find(
+    (r) =>
+      baseline.text.slice(r.oldStart, r.oldEnd).trim() !== "" &&
+      r.oldStart < found.end &&
+      r.oldEnd > found.start,
+  );
+  const span = { start: found.start, end: found.end };
+  if (!region) {
+    return {
+      spot: { from: at, to: at },
+      changed: false,
+      ...span,
+      removedBlock: null,
+      replacement: null,
+      changedBlockStart: -1,
+    };
+  }
+  const point = index.toPm(region.newStart);
+  const isPureRemoval = (x: TrackedChange) => x.block && x.newStart === x.newEnd;
+  const pureRemoval = isPureRemoval(region);
+  // what replaced it: the change's own added text plus the additions that
+  // directly follow it — a rewrite split across new blocks, as far as they
+  // share words with the old text (an unrelated insertion after it isn't
+  // part of it). Additions before it belong to the block before
+  const oldWords = baseline.text.slice(region.oldStart, region.oldEnd);
+  // one of a container's items that a block of another kind replaced whole
+  // (a list rewritten as a paragraph): the block after the run of removed
+  // items is its replacement too. Separate deletions don't run together
+  let at0 = changes.regions.indexOf(region);
+  const container = containerAt(baseline, region.oldStart);
+  if (pureRemoval && (container === "list" || container === "quote" || container === "table")) {
+    let k = at0;
+    while (
+      k + 1 < changes.regions.length &&
+      isPureRemoval(changes.regions[k + 1]) &&
+      changes.regions[k + 1].oldStart === changes.regions[k].oldEnd &&
+      changes.regions[k + 1].newStart === region.newStart &&
+      containerAt(baseline, changes.regions[k + 1].oldStart) === container
+    ) {
+      k++;
+    }
+    const after = changes.regions[k + 1];
+    const replacedByOther =
+      after && after.oldStart === after.oldEnd && containerAt(index, after.newStart) !== container;
+    if (replacedByOther) at0 = k;
+  }
+  let hi = at0;
+  const follows = (x: TrackedChange, y: TrackedChange) =>
+    y.oldStart === y.oldEnd && x.newEnd === y.newStart && x.oldEnd === y.oldStart;
+  while (hi + 1 < changes.regions.length && follows(changes.regions[hi], changes.regions[hi + 1])) {
+    const next = changes.regions[hi + 1];
+    // the removals' own replacement: a whole added block, not a word added
+    // to the next paragraph
+    const first = hi === at0 && isPureRemoval(changes.regions[at0]) && next.block;
+    if (!first && blockSimilarity(oldWords, index.text.slice(next.newStart, next.newEnd)) < ALIGN_EVIDENCE) break;
+    hi++;
+  }
+  const runStart = region.newStart;
+  const runEnd = changes.regions[hi].newEnd;
+  const added = index.text.slice(runStart, runEnd).trim() !== "" ? { start: runStart, end: runEnd } : null;
+  // the spot covers the struck text and what replaced it (its trailing
+  // separator would reach into the next block)
+  const repEnd = added ? added.start + index.text.slice(added.start, added.end).trimEnd().length : 0;
+  return {
+    spot: added
+      ? { from: index.toPm(added.start), to: index.toPm(repEnd), deletion: region.oldStart, inline: !region.block }
+      : { from: point, to: point, deletion: region.oldStart, inline: !region.block },
+    changed: hit.exact,
+    ...span,
+    removedBlock: pureRemoval ? baseline.text.slice(region.oldStart, region.oldEnd) : null,
+    replacement: added,
+    changedBlockStart: view.state.doc.resolve(point).start(),
+  };
+}
+
+/** The Milkdown editor for one document, with comment and tracked-change plugins. */
 export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
-  { docPath, initialMarkdown, onReady, onDirty, onSelectText, onClickComment },
+  {
+    docPath,
+    initialMarkdown,
+    onReady,
+    onDirty,
+    onSelectText,
+    onClickComment,
+    onChangeCount,
+    onCommentsWithChanges,
+  },
   ref,
 ) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -66,8 +270,16 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
   const suppressDoc = useRef<PmNode | null>(null);
 
   // Callbacks live in refs so the plugin (created once) sees fresh ones.
-  const callbacks = useRef({ onReady, onDirty, onSelectText, onClickComment });
-  callbacks.current = { onReady, onDirty, onSelectText, onClickComment };
+  const current = {
+    onReady,
+    onDirty,
+    onSelectText,
+    onClickComment,
+    onChangeCount,
+    onCommentsWithChanges,
+  };
+  const callbacks = useRef(current);
+  callbacks.current = current;
 
   useEffect(() => {
     let disposed = false;
@@ -75,6 +287,12 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
       createCommentsPlugin({ onClickComment: (id) => callbacks.current.onClickComment(id) }),
     );
     const imagePlugin = $prose(() => createImagePlugin(docPath));
+    const changesPlugin = $prose(() =>
+      createChangesPlugin({
+        onCount: (n) => callbacks.current.onChangeCount(n),
+        onCommentsWithChanges: (ids) => callbacks.current.onCommentsWithChanges(ids),
+      }),
+    );
 
     const editor = Editor.make()
       .config((ctx) => {
@@ -91,7 +309,8 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
       .use(history)
       .use(listener)
       .use(plugin)
-      .use(imagePlugin);
+      .use(imagePlugin)
+      .use(changesPlugin);
 
     void editor.create().then((instance) => {
       if (disposed) {
@@ -255,6 +474,72 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
           current.dispatch(current.state.tr.setMeta(commentsKey, { type: "draft", range: null }));
         }
       }, 1600);
+    },
+    setBaseline(markdown) {
+      const view = viewRef.current;
+      if (!view) return;
+      const baseline = markdown === null ? null : markdownToPlainBlocks(markdown);
+      view.dispatch(view.state.tr.setMeta(changesKey, { type: "baseline", baseline }));
+    },
+    setShowChanges(show) {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch(view.state.tr.setMeta(changesKey, { type: "show", show }));
+    },
+    spotlight(annotation, scroll = true) {
+      const view = viewRef.current;
+      if (!view) return false;
+      const located = annotation ? locate(view, annotation, new OffsetIndex(view.state.doc)) : null;
+      let spot = located;
+      // struck text shows only while changes are drawn: hidden, what replaced
+      // it (or the paragraph a change sits in) stays lit; a removed block
+      // with nothing in its place lights nothing — its neighbour is unrelated
+      if (spot?.deletion !== undefined && !changesKey.getState(view.state)?.show) {
+        spot = spot.from < spot.to || spot.inline ? { from: spot.from, to: spot.to } : null;
+      }
+      view.dispatch(
+        view.state.tr
+          .setMeta(commentsKey, { type: "spotlight", range: spot })
+          .setMeta(changesKey, { type: "spot", oldStart: spot?.deletion ?? null }),
+      );
+      if (located && scroll) {
+        const dom = view.domAtPos(located.from);
+        const el = dom.node instanceof HTMLElement ? dom.node : dom.node.parentElement;
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      return spot !== null;
+    },
+    positionsOf(annotations) {
+      const view = viewRef.current;
+      const out = new Map<string, number>();
+      const carried = new Set<string>();
+      const live = new Map<string, string>();
+      if (!view) return { positions: out, carried, live };
+      const ranges = commentsKey.getState(view.state)?.ranges ?? [];
+      for (const r of ranges) {
+        if (!r.collapsed && r.from < r.to) live.set(r.id, view.state.doc.textBetween(r.from, r.to, "\n").trim());
+      }
+      const index = new OffsetIndex(view.state.doc);
+      for (const a of annotations) {
+        const spot = locate(view, a, index);
+        if (spot) {
+          out.set(a.id, index.toText(spot.from));
+          if (spot.carried) carried.add(a.id);
+          continue;
+        }
+        // gone and past the baseline: the text that led into it, if it
+        // survives, still says where it was
+        const lead = a.target?.selector[0].prefix.trim().slice(-24);
+        if (!lead) continue;
+        // of several, the one nearest where it used to be
+        const was = a.target!.selector[1].start;
+        let best = -1;
+        for (let at = index.text.indexOf(lead); at !== -1; at = index.text.indexOf(lead, at + 1)) {
+          if (best === -1 || Math.abs(at - was) < Math.abs(best - was)) best = at;
+        }
+        if (best !== -1) out.set(a.id, best + lead.length);
+      }
+      return { positions: out, carried, live };
     },
     setDraft(range) {
       const view = viewRef.current;

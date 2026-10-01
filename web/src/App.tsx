@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { makeQuoteSelector, PROJECT_PATH } from "@redline/shared";
 import type { Annotation, Sidecar, TreeEntry } from "@redline/shared";
 import { api, ApiError, STATIC_MODE, subscribeEvents, type SearchResult } from "./api.ts";
@@ -6,7 +6,6 @@ import { CommentPopover } from "./components/CommentPopover.tsx";
 import { CommentSidebar } from "./components/CommentSidebar.tsx";
 import { DiffView } from "./components/DiffView.tsx";
 import { FileTree } from "./components/FileTree.tsx";
-import { FocusPanel, type FocusEntry } from "./components/FocusPanel.tsx";
 import { EditorPane, type EditorHandle, type SelectionInfo } from "./editor/EditorPane.tsx";
 
 // the static build's copy/paste agent leg; daemon bundles never load the chunk
@@ -16,11 +15,17 @@ type SaveState = "saved" | "dirty" | "saving";
 type Mode = "review" | "edit";
 type View = "editor" | "diff";
 
+interface FocusEntry {
+  annotation: Annotation;
+  isProject: boolean;
+}
+
 interface Draft {
   selection: SelectionInfo;
   text: string;
 }
 
+/** The redline app shell: file tree, document, comment sidebar. */
 export function App() {
   const [tree, setTree] = useState<TreeEntry[]>([]);
   const [path, setPath] = useState<string | null>(null);
@@ -37,7 +42,13 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [focusEntryId, setFocusEntryId] = useState<string | null>(null);
-  const [focusIdxFallback, setFocusIdxFallback] = useState(0); // used if the focused comment is deleted
+  const [editorReady, setEditorReady] = useState(false);
+  const [showChanges, setShowChanges] = useState(true);
+  const [changeCount, setChangeCount] = useState(0);
+  const [spotLit, setSpotLit] = useState(false);
+  const [baselineState, setBaselineState] = useState<"none" | "loading" | "ready" | "error">("none");
+  const [commentsWithChanges, setCommentsWithChanges] = useState<string[]>([]);
+  const focusPathRef = useRef<string | null>(null);
 
   const editorRef = useRef<EditorHandle>(null);
   const baseHashRef = useRef<string>("");
@@ -178,6 +189,12 @@ export function App() {
         const doc = await api.getDoc(p);
         baseHashRef.current = doc.hash;
         setInitialMarkdown(doc.markdown);
+        if (p !== pathRef.current) {
+          setEditorReady(false);
+          setChangeCount(0);
+          setBaselineState(doc.changed ? "loading" : "none");
+          setCommentsWithChanges([]);
+        }
         setPath(p);
         setSidecar(null);
         setFocusedId(null);
@@ -441,6 +458,7 @@ export function App() {
     const flush = saveStateRef.current !== "saved" && p ? save(p) : Promise.resolve();
     void flush.finally(() => {
       setPath(null);
+      setEditorReady(false);
       setInitialMarkdown("");
       setSidecar(null);
       setFocusedId(null);
@@ -454,60 +472,178 @@ export function App() {
 
   const annotations = sidecar?.annotations ?? [];
 
-  // focus mode can open ANY comment, ordered as a queue: everything needing
-  // attention first (project notes, document notes, then anchored comments
-  // by position), resolved history as a tail in the same scope order.
+  // focus mode walks the document: project notes, document notes, then
+  // anchored comments in reading order — everything still needing attention,
+  // plus whichever comment is on screen (accepting it mustn't yank it away
+  // before the step forward lands)
   const needsAttention = (a: Annotation) => a.status !== "resolved";
+  // where passages are now: stored offsets go stale for orphaned and
+  // addressed comments once later text moves
+  const { positions, carried, live } = useMemo(
+    () =>
+      editorRef.current?.positionsOf(annotations) ?? {
+        positions: new Map<string, number>(),
+        carried: new Set<string>(),
+        live: new Map<string, string>(),
+      },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sidecar, baselineState, changeCount, editorReady],
+  );
   const scopeOrdered: FocusEntry[] = [
     ...projectAnnotations.map((a) => ({ annotation: a, isProject: true })),
     ...annotations.filter((a) => !a.target).map((a) => ({ annotation: a, isProject: false })),
     ...annotations
       .filter((a) => a.target)
-      .sort((a, b) => a.target!.selector[1].start - b.target!.selector[1].start)
+      .map((a) => ({ a, at: positions.get(a.id) ?? a.target!.selector[1].start }))
+      .sort((x, y) => x.at - y.at)
+      .map(({ a }) => a)
       .map((a) => ({ annotation: a, isProject: false })),
   ];
-  const focusEntries: FocusEntry[] = [
-    ...scopeOrdered.filter((e) => needsAttention(e.annotation)),
-    ...scopeOrdered.filter((e) => !needsAttention(e.annotation)),
-  ];
-  const reviewEntries = focusEntries.filter((e) => needsAttention(e.annotation));
-  // navigation follows the COMMENT, not its list slot: statuses change while
-  // the panel is open (accepting re-sorts the card into the resolved tail),
-  // and an id survives that where an index would silently point elsewhere
-  const idxById = focusEntries.findIndex((e) => e.annotation.id === focusEntryId);
-  const focusIdx =
-    idxById !== -1 ? idxById : Math.max(0, Math.min(focusIdxFallback, focusEntries.length - 1));
-  const focusNavigate = (next: number) => {
-    const entry = focusEntries[next];
-    if (!entry) return;
+  const focusQueue = scopeOrdered.filter(
+    (e) => needsAttention(e.annotation) || (focusMode && e.annotation.id === focusEntryId),
+  );
+  const focusIdx = focusQueue.findIndex((e) => e.annotation.id === focusEntryId);
+  const focusCurrent = focusIdx === -1 ? null : focusQueue[focusIdx];
+
+  const focusOn = (entry: FocusEntry) => {
     setFocusEntryId(entry.annotation.id);
-    setFocusIdxFallback(next);
-    if (entry.annotation.target && entry.annotation.status !== "orphaned") {
-      focusComment(entry.annotation.id);
-    } else {
-      setFocusedId(entry.annotation.id);
-    }
+    setFocusedId(entry.annotation.id);
+    setFocusTick((t) => t + 1);
+    editorRef.current?.focusComment(entry.annotation.id);
+    setSpotLit(editorRef.current?.spotlight(entry.annotation) ?? false);
+  };
+  const focusStep = (delta: number) => {
+    if (!focusQueue.length) return;
+    const from = focusIdx === -1 ? (delta > 0 ? -1 : 0) : focusIdx;
+    focusOn(focusQueue[(from + delta + focusQueue.length) % focusQueue.length]);
   };
   const enterFocusMode = () => {
+    const start = focusQueue.find((e) => e.annotation.id === focusedId) ?? focusQueue[0];
+    if (!start) return;
+    // Focus reviews: read-only, in the document, with the agent's changes drawn
+    setView("editor");
+    setMode("review");
+    editorRef.current?.setEditable(false);
+    focusPathRef.current = path;
     setFocusMode(true);
-    const focusedIdx = focusEntries.findIndex((e) => e.annotation.id === focusedId);
-    // index 0 is the first item needing review, by construction of the order
-    focusNavigate(focusedIdx !== -1 ? focusedIdx : 0);
+    // from raw diff the editor is hidden until the view switch renders
+    // (claim the entry now, so the vanished-comment recovery stays quiet)
+    if (view === "diff") {
+      setFocusEntryId(start.annotation.id);
+      setTimeout(() => focusOn(start), 0);
+    } else focusOn(start);
   };
-  // clicking any sidebar card — resolved ones included — opens it in focus mode
-  const openCardInFocus = (id: string) => {
-    const idx = focusEntries.findIndex((e) => e.annotation.id === id);
-    if (idx === -1) return;
-    setFocusMode(true);
-    focusNavigate(idx);
+  const exitFocusMode = () => {
+    setFocusMode(false);
+    setSpotLit(false);
+    editorRef.current?.spotlight(null);
+  };
+  /** after a verdict on (or deletion of) the current comment: on to the next one still open */
+  const advanceFrom = (id: string) => {
+    if (!focusMode || id !== focusEntryId) return;
+    const i = focusQueue.findIndex((e) => e.annotation.id === id);
+    for (let step = 1; step < focusQueue.length; step++) {
+      const next = focusQueue[(i + step) % focusQueue.length];
+      if (next.annotation.id !== id && needsAttention(next.annotation)) return focusOn(next);
+    }
+    exitFocusMode(); // that was the last one
+  };
+  // card clicks: in focus mode, step to that comment; otherwise just find
+  // its passage
+  const onCardFocus = (id: string) => {
+    const entry = scopeOrdered.find((e) => e.annotation.id === id);
+    if (focusMode && entry) focusOn(entry);
+    else focusComment(id);
   };
 
-  // an emptied review queue must actually EXIT focus mode — otherwise the
-  // mode stays silently armed and the panel springs open, uninvited, the
-  // moment the next comment is created
+  // focus walks one document: opening another, or emptying the queue, ends
+  // the walk; a current comment that vanished hands over to the one that
+  // took its place
+  const lastFocusIdx = useRef(0);
+  if (focusIdx !== -1) lastFocusIdx.current = focusIdx;
   useEffect(() => {
-    if (focusMode && focusEntries.length === 0) setFocusMode(false);
-  }, [focusMode, focusEntries.length]);
+    if (!focusMode) return;
+    if (path !== focusPathRef.current || focusQueue.length === 0) exitFocusMode();
+    else if (focusIdx === -1) focusOn(focusQueue[Math.min(lastFocusIdx.current, focusQueue.length - 1)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMode, focusQueue.length, focusIdx, path]);
+
+  useEffect(() => {
+    if (!focusMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest("input, textarea, [contenteditable=true]")) return;
+      // modified arrows extend selections; an open menu or dialog owns the keys
+      if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+      if (document.querySelector(".rl-menu, .rl-handoff-panel, .rl-popover")) return;
+      if (e.key === "ArrowRight") (e.preventDefault(), focusStep(1));
+      else if (e.key === "ArrowLeft") (e.preventDefault(), focusStep(-1));
+      else if (e.key === "Escape") exitFocusMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // tracked changes: draw the agent's edits against the last-reviewed
+  // baseline, right in the document
+  useEffect(() => {
+    if (changed) setShowChanges(true);
+  }, [changed, path]);
+  useEffect(() => {
+    if (!path || !editorReady) return;
+    // Edit mode draws no changes, so skip diffing on every keystroke
+    if (!changed || mode !== "review") {
+      editorRef.current?.setBaseline(null);
+      setBaselineState("none");
+      return;
+    }
+    let stale = false;
+    setBaselineState("loading");
+    void api
+      .getBaseline(path)
+      .then((b) => {
+        if (stale) return;
+        editorRef.current?.setBaseline(b.markdown);
+        // no baseline despite `changed`: nothing to diff against
+        setBaselineState(b.markdown === null ? "error" : "ready");
+      })
+      .catch(() => !stale && setBaselineState("error"));
+    return () => {
+      stale = true;
+    };
+  }, [path, changed, editorReady, mode]);
+  useEffect(() => {
+    editorRef.current?.setShowChanges(showChanges && mode === "review");
+  }, [showChanges, mode, editorReady]);
+  // re-anchoring moves passages and the baseline locates deleted ones:
+  // re-light when either shifts, without scrolling. Declared after the
+  // show/hide effect, since the spotlight reads what's drawn
+  useEffect(() => {
+    if (focusMode && focusCurrent) {
+      setSpotLit(editorRef.current?.spotlight(focusCurrent.annotation, false) ?? false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidecar, baselineState, changeCount, showChanges]);
+  const markReviewed = () => {
+    if (!path) return;
+    void api
+      .markReviewed(path)
+      .then(() => {
+        setChanged(false);
+        setView("editor");
+      })
+      .catch((e) => showError(String(e)));
+  };
+  const openRawDiff = () => {
+    exitFocusMode(); // focus walks the rendered document, which raw diff hides
+    // flush any pending edit so the diff reflects reality
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const p = pathRef.current;
+    const flush = saveStateRef.current !== "saved" && p ? save(p) : Promise.resolve();
+    void flush.then(() => setView("diff"));
+  };
 
   // no counts in chrome — the tree badges and section headers already carry
   // them; the handoff verbs live in the header's top-right slot (web build)
@@ -516,7 +652,7 @@ export function App() {
     projectAnnotations.filter((a) => a.status === "open" || a.status === "orphaned").length;
 
   return (
-    <div className="rl-app">
+    <div className={`rl-app${focusMode ? " rl-focusing" : ""}${spotLit ? " rl-spotlit" : ""}`}>
       <FileTree
         entries={tree}
         currentPath={path}
@@ -550,21 +686,15 @@ export function App() {
             <header className="rl-header">
               <span className="rl-path">{path}</span>
               <div className="rl-header-right">
-                {changed && view === "editor" && (
+                {changed && view === "editor" && mode === "review" && baselineState !== "loading" && (
                   <button
-                    className="rl-changes-btn"
-                    onClick={() => {
-                      // flush any pending edit so the diff reflects reality
-                      if (saveTimer.current) {
-                        clearTimeout(saveTimer.current);
-                        saveTimer.current = null;
-                      }
-                      const p = pathRef.current;
-                      const flush = saveStateRef.current !== "saved" && p ? save(p) : Promise.resolve();
-                      void flush.then(() => setView("diff"));
-                    }}
+                    className={`rl-changes-btn${showChanges ? " active" : ""}`}
+                    onClick={() => setShowChanges((v) => !v)}
+                    title={showChanges ? "Hide tracked changes" : "Show the changes since you last reviewed"}
                   >
-                    ● changes
+                    {baselineState === "error"
+                      ? "● changes"
+                      : `● ${changeCount || "formatting"} change${changeCount === 1 ? "" : "s"}`}
                   </button>
                 )}
                 {STATIC_MODE && (
@@ -580,7 +710,7 @@ export function App() {
                   <button
                     className={!focusMode && mode === "review" ? "active" : ""}
                     onClick={() => {
-                      setFocusMode(false);
+                      exitFocusMode();
                       setMode("review");
                       editorRef.current?.setEditable(false);
                     }}
@@ -591,7 +721,7 @@ export function App() {
                   <button
                     className={!focusMode && mode === "edit" ? "active" : ""}
                     onClick={() => {
-                      setFocusMode(false);
+                      exitFocusMode();
                       setMode("edit");
                       editorRef.current?.setEditable(true);
                       cancelDraft();
@@ -602,14 +732,27 @@ export function App() {
                   </button>
                   <button
                     className={focusMode ? "active" : ""}
-                    disabled={focusEntries.length === 0}
-                    onClick={enterFocusMode}
-                    title="Step through the comments one at a time (Esc exits)"
+                    disabled={focusQueue.length === 0}
+                    onClick={() => (focusMode ? exitFocusMode() : enterFocusMode())}
+                    title="Walk the document comment by comment (←/→ step, Esc exits)"
                     data-label="Focus"
                   >
                     Focus
                   </button>
                 </div>
+                {focusMode && (
+                  <div className="rl-stepper" aria-label="comment navigation">
+                    <button onClick={() => focusStep(-1)} title="Previous (←)">
+                      ‹
+                    </button>
+                    <span>
+                      {focusIdx === -1 ? "–" : focusIdx + 1} / {focusQueue.length}
+                    </span>
+                    <button onClick={() => focusStep(1)} title="Next (→)">
+                      ›
+                    </button>
+                  </div>
+                )}
                 <span className={`rl-save rl-save-${saveState}`}>
                   {saveState === "saved" ? "saved" : saveState === "saving" ? "saving…" : "editing…"}
                 </span>
@@ -622,14 +765,31 @@ export function App() {
               <DiffView
                 path={path}
                 onClose={() => setView("editor")}
-                onMarkReviewed={() => {
-                  void api.markReviewed(path).then(() => {
-                    setChanged(false);
-                    setView("editor");
-                  });
-                }}
+                onMarkReviewed={markReviewed}
               />
             ) : null}
+            {changed && view === "editor" && mode === "review" && baselineState !== "loading" && (
+              <div className="rl-changes-bar">
+                {baselineState === "error" ? (
+                  <span>Couldn't load the last-reviewed version to compare against</span>
+                ) : changeCount > 0 && !showChanges ? (
+                  <span>Changes since you last reviewed are hidden</span>
+                ) : changeCount > 0 ? (
+                  <span>
+                    <ins>added</ins> <del>removed</del> since you last reviewed
+                  </span>
+                ) : (
+                  // links, heading levels, emphasis: invisible in the rendered text
+                  <span>Only markdown formatting changed since you last reviewed</span>
+                )}
+                <span>
+                  <button onClick={openRawDiff}>raw diff</button>{" "}
+                  <button className="rl-primary" onClick={markReviewed}>
+                    mark reviewed
+                  </button>
+                </span>
+              </div>
+            )}
             <div style={{ display: view === "diff" ? "none" : "contents" }}>
               <EditorPane
                 key={path}
@@ -637,6 +797,7 @@ export function App() {
                 docPath={path}
                 initialMarkdown={initialMarkdown}
                 onReady={() => {
+                  setEditorReady(true);
                   editorRef.current?.setEditable(mode === "edit");
                   void refreshComments(path).then(() => {
                     if (pendingScroll.current) {
@@ -650,7 +811,9 @@ export function App() {
                 }}
                 onDirty={onDirty}
                 onSelectText={onSelectText}
-                onClickComment={focusComment}
+                onClickComment={onCardFocus}
+                onChangeCount={setChangeCount}
+                onCommentsWithChanges={setCommentsWithChanges}
               />
             </div>
           </>
@@ -682,11 +845,19 @@ export function App() {
         hasOpenDoc={path !== null}
         focusedId={focusedId}
         focusTick={focusTick}
+        // a carried-off comment's live quote isn't the change: no was/now either
+        commentsWithChanges={
+          baselineState === "loading"
+            ? null
+            : new Set([...(view === "editor" ? commentsWithChanges : []), ...carried])
+        }
+        liveQuotes={live}
         onAddNote={addNote}
-        onFocus={openCardInFocus}
+        onFocus={onCardFocus}
         onDelete={(id, isProject) => {
           const p = commentPath(isProject);
           if (p) void api.deleteComment(id, p).catch((e) => showError(String(e)));
+          advanceFrom(id);
         }}
         onReopen={(id, isProject) => {
           const p = commentPath(isProject);
@@ -696,10 +867,12 @@ export function App() {
           const p = commentPath(isProject);
           if (p)
             void api.patchComment(id, { path: p, status: "resolved" }).catch((e) => showError(String(e)));
+          advanceFrom(id);
         }}
         onReply={(id, isProject, text) => {
           const p = commentPath(isProject);
           if (p) void api.patchComment(id, { path: p, reply: text }).catch((e) => showError(String(e)));
+          advanceFrom(id);
         }}
         onEdit={(id, isProject, text) => {
           const p = commentPath(isProject);
@@ -713,50 +886,6 @@ export function App() {
               .catch((e) => showError(String(e)));
         }}
       />
-
-      {focusMode && focusEntries.length > 0 && (
-        <FocusPanel
-          entries={focusEntries}
-          index={focusIdx}
-          onNavigate={focusNavigate}
-          onClose={() => setFocusMode(false)}
-          onMarkResolved={(id, isProject) => {
-            const p = commentPath(isProject);
-            if (p)
-              void api
-                .patchComment(id, { path: p, status: "resolved" })
-                .catch((e) => showError(String(e)));
-          }}
-          onReopen={(id, isProject) => {
-            const p = commentPath(isProject);
-            if (p)
-              void api
-                .patchComment(id, { path: p, status: "open" })
-                .catch((e) => showError(String(e)));
-          }}
-          onDelete={(id, isProject) => {
-            const p = commentPath(isProject);
-            if (p) void api.deleteComment(id, p).catch((e) => showError(String(e)));
-          }}
-          onEdit={(id, isProject, text) => {
-            const p = commentPath(isProject);
-            if (p)
-              void api.patchComment(id, { path: p, body: text }).catch((e) => showError(String(e)));
-          }}
-          onReply={(id, isProject, text) => {
-            const p = commentPath(isProject);
-            if (p)
-              void api.patchComment(id, { path: p, reply: text }).catch((e) => showError(String(e)));
-          }}
-          onEditReply={(id, isProject, index, text) => {
-            const p = commentPath(isProject);
-            if (p)
-              void api
-                .patchComment(id, { path: p, editReply: { index, text } })
-                .catch((e) => showError(String(e)));
-          }}
-        />
-      )}
 
       {dragging && (
         <div className="rl-drop-overlay">

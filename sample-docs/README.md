@@ -89,9 +89,11 @@ Beyond passage comments:
   card reopens it with your rebuttal attached; Claude sees the full thread on
   the next pass.
 
-* **Changes** — after Claude edits a document, a `● changes` button appears in
-  the header: a diff of everything since you last looked (your own edits don't
-  count). `mark reviewed` acknowledges it.
+* **Changes** — after Claude edits a document, its changes since you last
+  looked are drawn right in the text: new wording underlined, removed wording
+  struck through, in Review mode (your own edits don't count — saving one in
+  Edit mode moves the baseline on, so review Claude's first). `● N changes`
+  in the header shows or hides them; `mark reviewed` acknowledges them.
 
 * **Search** — the box above the file tree searches all documents; clicking a
   result jumps to and flashes the match.

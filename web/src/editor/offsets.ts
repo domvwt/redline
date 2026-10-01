@@ -7,6 +7,16 @@ interface Segment {
   textTo: number;
 }
 
+/** nearest container's kind, else the textblock's own (see shared/plaintext.ts) */
+function blockKind(node: PmNode, parent: PmNode | null, column: number): string {
+  const p = parent?.type.name ?? "";
+  if (node.type.name === "code_block") return "code";
+  if (p.startsWith("table")) return `table:${column}`;
+  if (p === "list_item") return "list";
+  if (p === "blockquote") return "quote";
+  return node.type.name;
+}
+
 /**
  * Bidirectional index between ProseMirror positions and offsets in the
  * document's plain-text rendering. Textblocks are separated by '\n'; inline
@@ -16,13 +26,26 @@ interface Segment {
  */
 export class OffsetIndex {
   readonly text: string;
+  /** plain-text offset where each textblock begins (see markdownToPlainBlocks) */
+  readonly blockStarts: number[] = [];
+  /** PM position of each of those textblocks (just before the node) */
+  readonly blockPositions: number[] = [];
+  /** each textblock's kind, named as markdownToPlainBlocks names them */
+  readonly blockKinds: string[] = [];
   private segments: Segment[] = [];
 
   constructor(doc: PmNode) {
     let text = "";
-    doc.descendants((node, pos) => {
+    let column = 0;
+    doc.descendants((node, pos, parent, index) => {
+      if (parent?.type.name === "table_row" || parent?.type.name === "table_header_row") column = index;
       if (node.isTextblock && pos > 0 && text.length > 0 && !text.endsWith("\n")) {
         text += "\n";
+      }
+      if (node.isTextblock) {
+        this.blockStarts.push(text.length);
+        this.blockPositions.push(pos);
+        this.blockKinds.push(blockKind(node, parent, column));
       }
       if (node.isText && node.text) {
         this.segments.push({

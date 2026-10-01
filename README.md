@@ -104,24 +104,35 @@ Beyond passage comments:
   place, and your own replies inside a thread have an `edit` affordance too
   (the agent sees the updated wording on the next pass).
 
-* **Focus mode** — `focus` in the status bar reviews everything still
-  needing attention (project notes, document notes, then inline comments in
-  document order) one at a time in a centred card over a dimmed backdrop:
-  the conversation on top, the quoted passage in context below. `←`/`→`
-  navigate, accepting slides the queue forward, replying advances to the
-  next comment, `Esc` (or clicking outside) exits.
+* **Changes, in the document** — after the agent edits a document, its
+  changes since you last looked are drawn right in the rendered text:
+  revised wording underlined in green or struck through in red, whole
+  paragraphs added or removed marked with a rule in the margin, in Review
+  mode. Your own edits don't count — saving one in Edit mode moves the
+  baseline forward, so review the agent's changes first. The
+  `● N changes` button in the header shows or hides
+  them; `mark reviewed` acknowledges them, and `raw diff` shows the
+  markdown line diff when you want to check the source. Changes to markup
+  rather than wording — a link target, a heading level, a paragraph turned
+  into a quote — aren't drawn or counted: `raw diff` shows them, and when they're the only changes the
+  button reads `● formatting changes`. While changes are
+  hidden (or once you've marked them reviewed), a card awaiting your review
+  shows its passage's was/now wording itself.
 
-  <img src="docs/assets/screenshot-focus.png" alt="Focus mode: one comment in a centred card over the dimmed document, with the quoted passage shown in context below the conversation">
+* **Focus mode** — `Focus` in the header walks the document one comment at
+  a time: project notes, document notes, then inline comments in reading
+  order. The comment's paragraph and its card stay lit while everything
+  else fades back, so you judge each proposal against the real surrounding
+  text and the agent's change to it. `←`/`→` step, accepting or replying
+  moves on to the next open comment, `Esc` exits. A comment whose passage
+  the agent deleted lands where it was, on the struck-through text, while
+  that change is still unreviewed; once you `mark reviewed`, its card's
+  quote keeps the old wording.
 
-* **Changes** — after the agent edits a document, a `● changes` button appears in
-  the header: a diff of everything since you last looked (your own edits don't
-  count). `mark reviewed` acknowledges it.
+  <img src="docs/assets/screenshot-focus.png" alt="Focus mode: the commented paragraph and its card stay lit while the rest of the document fades, with the agent's rewrite shown as tracked changes">
 
 * **Search** — the box above the file tree searches all documents; clicking a
   result jumps to and flashes the match.
-
-* **Stepping through comments** — the `‹ ›` buttons in the status bar walk
-  the anchored open comments in document order, centring each passage.
 
 * **Copy for chat** — in the sidebar's `⋯` menu: puts the open comments
   (quotes, notes, threads) on the clipboard as self-contained markdown, for
@@ -202,7 +213,7 @@ in your browser, on your device — nothing is uploaded anywhere. Instead of a
 local agent editing files, you round-trip through any AI chat:
 
 1. Drop or paste a markdown document in, review it, leave comments.
-2. **copy for AI** (in the status bar) puts a self-contained prompt on your
+2. **copy for AI** (in the header) puts a self-contained prompt on your
    clipboard: the document, your comments with their quoted passages, and
    instructions for how to reply. Paste it into ChatGPT, Microsoft
    Copilot, Gemini, Claude — any assistant.
@@ -210,7 +221,7 @@ local agent editing files, you round-trip through any AI chat:
    the natural shape of a chat reply. **paste reply** brings it back:
    redline applies the new version and marks each comment *awaiting your
    review* with the assistant's response attached.
-4. From there it's the normal workflow: review the diff under **● changes**,
+4. From there it's the normal workflow: review the agent's changes in the document,
    and `accept` or `reply` on each card.
 
 The lifecycle rules are identical to the daemon version — the assistant only

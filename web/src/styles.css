@@ -90,6 +90,10 @@
   --amber-focus: #f5d97e;
   --green: #33724d;
   --amber-note: #a06a12;
+  --ins-bg: #e3f2e6;
+  --del-bg: #fbe7e4;
+  --del-text: #8f3a2c;
+  --del-line: #c25c4a;
   --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --serif: "Charter Web", Charter, "Sitka Text", Cambria, Georgia, serif;
   /* Both faces are BUNDLED: JetBrains Mono for text, Redline Symbols for
@@ -191,8 +195,17 @@ body {
   font-size: 13px;
   background: var(--bg);
 }
-.rl-header-right { display: flex; align-items: center; gap: 14px; }
-.rl-path { color: var(--muted); font-family: var(--mono); font-size: 12.5px; }
+.rl-header-right { flex-shrink: 0; display: flex; align-items: center; gap: 14px; }
+/* the path gives way first when the header runs out of room */
+.rl-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
 .rl-save { font-size: 12px; color: var(--muted); min-width: 52px; text-align: right; }
 .rl-save-saved { color: var(--green); }
 .rl-save-dirty, .rl-save-saving { color: var(--amber-note); }
@@ -334,7 +347,6 @@ body {
 }
 .rl-collapse .rl-chevron { transform: rotate(90deg); }
 .rl-collapse.collapsed .rl-chevron { transform: rotate(0deg); }
-.rl-hint { font-size: 12.5px; margin: -2px 2px 10px; line-height: 1.45; }
 .rl-card {
   position: relative;
   background: var(--paper);
@@ -398,16 +410,6 @@ body {
 .rl-card-resolved { opacity: 0.72; }
 .rl-card-resolved blockquote { border-left-color: var(--green); }
 .rl-card-addressed blockquote { border-left-color: var(--green); }
-.rl-addressed-mark {
-  display: inline-block;
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--green);
-  margin-top: 6px;
-  cursor: help;
-}
 .rl-card-actions .rl-accept { color: var(--green); font-weight: 600; }
 .rl-thread-edit {
   border: none;
@@ -569,58 +571,54 @@ body {
 }
 .rl-close-doc:hover { color: var(--accent); background: var(--panel); }
 
-/* ---------- focus mode ---------- */
-.rl-focus-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 39;
-  background: rgba(35, 33, 29, 0.4);
+/* ---------- focus mode: walking the document ---------- */
+/* the passage under review and its card stay lit; everything else steps back
+   — the document itself is the context, never covered */
+.rl-focusing .rl-editor .ProseMirror > *,
+.rl-focusing .rl-sidebar .rl-card,
+.rl-focusing .rl-tree {
+  transition: opacity 0.2s ease;
 }
-.rl-focus-panel {
-  position: fixed;
-  /* anchored at the top so the nav controls never move as card height varies */
-  top: 9vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(660px, 92vw);
-  background: var(--paper);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 24px 64px rgba(35, 33, 29, 0.35);
-  padding: 20px 24px;
-  z-index: 40;
-  max-height: 78vh;
-  overflow-y: auto;
-  font-size: 13.5px;
+/* dim only once something is lit. Lit: the passage's blocks, any block
+   holding the struck text of a deleted passage, and a replaced block's old
+   version just above it */
+.rl-spotlit .rl-editor .ProseMirror
+  > :not(.rl-spot):not(.rl-spot-del):not(:has(.rl-spot-del)):not(.rl-del-replaced:has(+ .rl-spot)) {
+  opacity: 0.38;
 }
-.rl-focus-panel .rl-card-body { font-size: 14.5px; line-height: 1.55; }
-.rl-focus-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+/* inside a lit list or table, the items around the passage step back */
+.rl-spotlit .rl-editor .ProseMirror > .rl-spot :is(li, tr):not(:has(.rl-spot-in)),
+/* struck items between them (inside a dimmed item they'd dim twice), unless
+   it's the old version just above the item under review */
+.rl-spotlit .rl-editor .ProseMirror
+  > .rl-spot:is(ul, ol)
+  > .rl-del-block:not(.rl-spot-del):not(.rl-del-replaced:has(+ li .rl-spot-in)),
+.rl-spotlit .rl-editor .ProseMirror
+  > .rl-spot
+  :is(ul, ol, tbody)
+  > .rl-del-block:not(.rl-spot-del):not(.rl-del-replaced:has(+ :is(li, tr) .rl-spot-in)) {
+  opacity: 0.38;
 }
-.rl-focus-head .rl-addressed-mark,
-.rl-focus-head .rl-orphan-mark,
-.rl-focus-head .rl-resolved-mark { margin: 0; }
-/* the scope chip is metadata here, not a call to action — no pill, just a
-   quiet label */
-.rl-focus-head .rl-chip {
-  background: none;
-  color: var(--muted);
-  font-weight: 600;
-  padding: 0;
-  margin: 0; /* the base chip's card-context margin-bottom skews flex centring */
+/* inside the container holding struck text, its other parts step back */
+.rl-spotlit .rl-editor .ProseMirror
+  > :has(.rl-spot-del)
+  :is(li, tr, blockquote > *):not(:has(.rl-spot-del)):not(.rl-spot-del):not(.rl-spot-in):not(:has(.rl-spot-in)) {
+  opacity: 0.38;
 }
-.rl-focus-nav {
-  margin-left: auto;
+.rl-focusing .rl-sidebar .rl-card:not(.focused) { opacity: 0.4; }
+.rl-focusing .rl-tree { opacity: 0.55; }
+.rl-stepper {
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.rl-focus-nav button {
+.rl-stepper button {
   border: 1px solid var(--border);
-  background: none;
+  background: var(--paper);
   border-radius: 5px;
   width: 24px;
   padding: 2px 0;
@@ -629,73 +627,83 @@ body {
   color: var(--muted);
   cursor: pointer;
 }
-.rl-focus-nav button:hover { color: var(--accent); border-color: var(--accent); }
-.rl-focus-count { font-size: 11.5px; color: var(--muted); }
-.rl-focus-close { margin-left: 4px; }
-.rl-focus-passage {
-  margin-top: 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  padding: 12px 14px;
-  max-height: 30vh;
-  overflow-y: auto;
+.rl-stepper button:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- tracked changes, drawn in the document ---------- */
+.rl-editor .ProseMirror .rl-ins {
+  background: var(--ins-bg);
+  box-shadow: inset 0 -1.5px 0 var(--green);
+  text-decoration: none;
 }
-.rl-focus-passage-label {
-  display: block;
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  margin-bottom: 6px;
+.rl-editor .ProseMirror .rl-del {
+  background: var(--del-bg);
+  color: var(--del-text);
+  text-decoration: line-through;
+  text-decoration-color: var(--del-line);
+  white-space: pre-wrap;
+  user-select: none;
 }
-.rl-focus-passage-text {
-  margin: 0;
+/* whole paragraphs: a rule in the margin says "this block is new / was here" */
+.rl-editor .ProseMirror .rl-ins-block,
+.rl-editor .ProseMirror .rl-del-block {
+  margin-left: -17px;
+  padding-left: 14px;
+  border-left: 3px solid var(--green);
+}
+.rl-editor .ProseMirror .rl-ins-block .rl-ins { box-shadow: none; }
+.rl-editor .ProseMirror .rl-del-block {
+  margin-top: 0.6em;
+  margin-bottom: 0.6em;
+  color: var(--del-text);
+  text-decoration: line-through;
+  text-decoration-color: var(--del-line);
+  white-space: pre-wrap;
+  border-left-color: var(--del-line);
+  user-select: none;
+}
+/* was/now on a card, when the document isn't drawing the change itself */
+.rl-passage-change {
+  margin: 6px 0 8px;
   font-family: var(--serif);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
 }
-.rl-focus-passage-text mark {
-  background: var(--amber-hl);
-  box-shadow: inset 0 -2px 0 var(--amber-hl-border);
-  border-radius: 2px;
-  padding: 0.12em 0;
-  color: inherit;
-}
-.rl-focus-context { color: var(--muted); }
-.rl-passage-was { margin-bottom: 8px; }
-.rl-passage-was + .rl-passage-now { border-top: 1px solid var(--border); padding-top: 8px; }
+.rl-passage-change p { margin: 0 0 3px; }
 .rl-passage-tag {
   display: inline-block;
+  width: 30px;
   font-family: var(--sans);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--muted);
-  margin-right: 8px;
-  width: 26px;
 }
-.rl-passage-was del {
-  background: #fbe7e4;
-  text-decoration: line-through;
-  text-decoration-color: #c25c4a;
-  border-radius: 2px;
-  padding: 0.12em 0;
+.rl-passage-was del { background: var(--del-bg); text-decoration-color: var(--del-line); }
+.rl-passage-now ins { background: var(--ins-bg); text-decoration: none; }
+.rl-changes-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 28px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--bg);
 }
-.rl-passage-now ins {
-  background: #e3f2e6;
-  text-decoration: none;
-  border-radius: 2px;
-  padding: 0.12em 0;
-}
-.rl-anchor-lost-note {
-  font-family: var(--sans);
+.rl-changes-bar ins,
+.rl-changes-bar del { padding: 0 3px; border-radius: 2px; }
+.rl-changes-bar ins { background: var(--ins-bg); text-decoration: none; }
+.rl-changes-bar del { background: var(--del-bg); text-decoration-color: var(--del-line); }
+.rl-changes-bar button {
+  border: 1px solid var(--border);
+  background: var(--paper);
+  border-radius: 7px;
+  padding: 3px 10px;
   font-size: 12px;
-  color: var(--muted);
-  margin: 8px 0 0;
+  cursor: pointer;
 }
+.rl-changes-bar .rl-primary { background: var(--text); color: #fff; border-color: var(--text); }
 .rl-stale-quote-mark {
   display: block;
   font-family: var(--sans);
@@ -773,8 +781,9 @@ body {
 
 /* ---------- changes / diff ---------- */
 .rl-changes-btn {
-  border: 1px solid var(--amber-hl-border);
-  background: var(--amber-hl);
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: none;
   color: var(--amber-note);
   border-radius: 8px;
   padding: 4px 12px;
@@ -782,6 +791,7 @@ body {
   font-weight: 600;
   cursor: pointer;
 }
+.rl-changes-btn.active { border-color: var(--amber-hl-border); background: var(--amber-hl); }
 .rl-diff { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .rl-diff-bar {
   display: flex;
@@ -883,7 +893,31 @@ pre code,
 }
 
 /* ---------- handoff (static web build) ---------- */
-.rl-handoff-panel { display: flex; flex-direction: column; gap: 12px; }
+.rl-handoff-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(35, 33, 29, 0.4);
+}
+.rl-handoff-panel {
+  position: fixed;
+  top: 9vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(660px, 92vw);
+  max-height: 78vh;
+  overflow-y: auto;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+  font-size: 13.5px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(35, 33, 29, 0.35);
+}
 .rl-handoff-title { margin: 0; font-size: 15px; color: var(--text); }
 .rl-handoff-input {
   width: 100%;
@@ -960,19 +994,7 @@ pre code,
 
 .rl-tree .rl-empty { margin: 6px 2px 0; font-size: 12.5px; }
 
-/* ---------- review actions, floating on the canvas margin ---------- */
-.rl-main { position: relative; }
-
-.rl-canvas-actions {
-  position: absolute;
-  top: 54px;
-  right: 22px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 5px;
-  z-index: 20;
-}
+/* ---------- review actions ---------- */
 /* actions are quiet text on the paper — no chrome, accent on hover, and the
    loop's single next step carries the accent at rest */
 .rl-action {

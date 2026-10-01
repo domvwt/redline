@@ -12,7 +12,8 @@ import { diffWordsWithSpace } from "diff";
  * the positions were anchored against) — callers gate on that.
  */
 
-interface Region {
+/** One run of a word diff: `changed` false means old and new text are equal. */
+export interface Region {
   oldStart: number;
   oldEnd: number;
   newStart: number;
@@ -20,6 +21,7 @@ interface Region {
   changed: boolean;
 }
 
+/** Maps an old [start, end) span to its new location, or null when it can't. */
 export type SpanMapper = (start: number, end: number) => { start: number; end: number } | null;
 
 /** Myers diff is O(N·D); a whole-document rewrite of a large doc could stall
@@ -35,17 +37,18 @@ function maxMappedLength(oldLen: number): number {
 }
 
 /**
- * Build a span mapper from the word-level diff of two plain texts. Returns a
- * function mapping an old [start, end) span to its new location:
- *  - a span inside unchanged text maps by offset arithmetic;
- *  - a span touching changed text stretches to cover the full replacement
- *    (so the was/now comparison shows the whole rewrite);
- *  - a span whose text was deleted with nothing in its place, or whose
- *    replacement fails the sanity bound, maps to null.
+ * The word-level diff of two plain texts as alternating unchanged/changed
+ * regions, or null when the diff exceeds its time budget. Adjacent
+ * removed+added runs merge into one replacement region, and whitespace-only
+ * gaps between changes fold into the surrounding change.
  */
-export function createSpanMapper(oldText: string, newText: string): SpanMapper {
-  const parts = diffWordsWithSpace(oldText, newText, { timeout: DIFF_TIMEOUT_MS });
-  if (!parts) return () => null; // diff gave up within the time budget
+export function diffRegions(
+  oldText: string,
+  newText: string,
+  timeoutMs = DIFF_TIMEOUT_MS,
+): Region[] | null {
+  const parts = diffWordsWithSpace(oldText, newText, { timeout: timeoutMs });
+  if (!parts) return null;
 
   // fold the part list into alternating unchanged/changed regions; adjacent
   // removed+added runs (either order) merge into one replacement region
@@ -98,6 +101,21 @@ export function createSpanMapper(oldText: string, newText: string): SpanMapper {
       folded.push({ ...r, changed: true });
     }
   }
+  return folded;
+}
+
+/**
+ * Build a span mapper from the word-level diff of two plain texts. Returns a
+ * function mapping an old [start, end) span to its new location:
+ *  - a span inside unchanged text maps by offset arithmetic;
+ *  - a span touching changed text stretches to cover the full replacement
+ *    (so the was/now comparison shows the whole rewrite);
+ *  - a span whose text was deleted with nothing in its place, or whose
+ *    replacement fails the sanity bound, maps to null.
+ */
+export function createSpanMapper(oldText: string, newText: string): SpanMapper {
+  const folded = diffRegions(oldText, newText);
+  if (!folded) return () => null; // diff gave up within the time budget
 
   return (start, end) => {
     if (start < 0 || end > oldText.length || start >= end) return null;

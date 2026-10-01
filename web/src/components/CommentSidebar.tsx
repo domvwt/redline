@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { diffWords } from "diff";
 import type { Annotation, Reply } from "@redline/shared";
 
+/** Card actions the sidebar reports back to the app. */
 export interface CommentActions {
   onFocus(id: string): void;
   onDelete(id: string, isProject: boolean): void;
@@ -19,6 +21,11 @@ interface Props extends CommentActions {
   focusedId: string | null;
   /** bumped on every focus call, so re-focusing the same id still scrolls */
   focusTick: number;
+  /** comments whose change the document is drawing, so their cards needn't
+   *  repeat it; null while that isn't known yet */
+  commentsWithChanges: Set<string> | null;
+  /** each comment's live text in the document, which a card's "now" reads */
+  liveQuotes: Map<string, string>;
   onAddNote(scope: "document" | "project", text: string): void;
 }
 
@@ -75,7 +82,7 @@ function tokenize(text: string): Tok[] {
   return out;
 }
 
-export function RichText({ text }: { text: string }) {
+function RichText({ text }: { text: string }) {
   return (
     <>
       {tokenize(text).map((t, i) =>
@@ -147,7 +154,7 @@ function Section({
 
 /* ---- cards ---- */
 
-export function ReplyThread({
+function ReplyThread({
   replies,
   onEditReply,
 }: {
@@ -200,15 +207,50 @@ export function ReplyThread({
   );
 }
 
+/**
+ * The agent's rewrite of a commented passage, was/now with word-level marks
+ * — for when the document isn't drawing that change (hidden, or the
+ * baseline has moved past the revision).
+ */
+function PassageChange({ annotation, now }: { annotation: Annotation; now?: string }) {
+  const prior = annotation.priorQuote?.exact;
+  // "now" is the live text, not the stored quote (a later edit may have
+  // moved on): without it, no was/now rather than a stale one. A lost
+  // passage already shows its old wording as the card's quote
+  if (!prior || !now || prior === now || annotation.anchorLost) return null;
+  const parts = diffWords(prior, now);
+  return (
+    <div className="rl-passage-change">
+      <p className="rl-passage-was">
+        <span className="rl-passage-tag">was</span>
+        {parts
+          .filter((p) => !p.added)
+          .map((p, i) => (p.removed ? <del key={i}>{p.value}</del> : <span key={i}>{p.value}</span>))}
+      </p>
+      <p className="rl-passage-now">
+        <span className="rl-passage-tag">now</span>
+        {parts
+          .filter((p) => !p.removed)
+          .map((p, i) => (p.added ? <ins key={i}>{p.value}</ins> : <span key={i}>{p.value}</span>))}
+      </p>
+    </div>
+  );
+}
+
 function CommentCard({
   annotation,
   isProject,
   focused,
+  changeDrawn,
+  liveQuote,
   actions,
 }: {
   annotation: Annotation;
   isProject: boolean;
   focused: boolean;
+  /** the document shows this comment's change itself */
+  changeDrawn: boolean;
+  liveQuote?: string;
   actions: CommentActions;
 }) {
   const [replying, setReplying] = useState(false);
@@ -269,6 +311,9 @@ function CommentCard({
             </span>
           )}
         </blockquote>
+      )}
+      {annotation.status === "addressed" && !changeDrawn && (
+        <PassageChange annotation={annotation} now={liveQuote} />
       )}
       {editing ? (
         <div className="rl-reply-form" onClick={(e) => e.stopPropagation()}>
@@ -483,6 +528,7 @@ function ActionsMenu({
   );
 }
 
+/** Right-hand sidebar: project notes, document notes, and anchored comment cards. */
 export function CommentSidebar({
   annotations,
   projectAnnotations,
@@ -490,6 +536,8 @@ export function CommentSidebar({
   hasOpenDoc,
   focusedId,
   focusTick,
+  commentsWithChanges,
+  liveQuotes,
   onAddNote,
   ...actions
 }: Props) {
@@ -538,6 +586,8 @@ export function CommentSidebar({
         annotation={a}
         isProject={isProject}
         focused={a.id === focusedId}
+        changeDrawn={commentsWithChanges?.has(a.id) ?? true}
+        liveQuote={liveQuotes.get(a.id)}
         actions={actions}
       />
     ));

@@ -32,6 +32,7 @@ interface ApplyReport {
   warnings: string[];
 }
 
+/** Header verbs for the copy/paste round trip, plus the paste-reply dialog. */
 export function HandoffControls({
   currentPath,
   readyCount,
@@ -183,8 +184,8 @@ export function HandoffControls({
 
       {modalOpen && (
         <>
-          <div className="rl-focus-backdrop" onClick={close} />
-          <div className="rl-focus-panel rl-handoff-panel">
+          <div className="rl-handoff-backdrop" onClick={close} />
+          <div className="rl-handoff-panel">
             {report === null ? (
               <>
                 <h3 className="rl-handoff-title">Paste the assistant's reply</h3>
@@ -252,8 +253,8 @@ export function HandoffControls({
                     </div>
                   ))}
                   <p className="rl-handoff-hint">
-                    Updated documents show a <strong>● changes</strong> button — review the diff
-                    there, and accept or reply to each response on its card.
+                    The assistant's edits now show in the document as tracked changes — review
+                    them there, and accept or reply to each response on its card.
                   </p>
                 </div>
                 <div className="rl-handoff-actions">
