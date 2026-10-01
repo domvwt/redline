@@ -14,10 +14,8 @@ import type { Node as PmNode } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import {
   ALIGN_EVIDENCE,
-  PAIR_THRESHOLD,
   blockSimilarity,
   mapFromBaseline,
-  mapToBaseline,
   markdownToPlainBlocks,
   resolveAnchor,
   type Annotation,
@@ -69,16 +67,10 @@ export interface EditorHandle {
    */
   spotlight(annotation: Annotation | null, scroll?: boolean): boolean;
   /**
-   * Where each comment's passage is now (plain-text offsets; unknown ones
-   * are left out), and which comments re-anchoring carried off their
-   * passage — their live quote is not the agent's change.
+   * Where each comment's passage is now (plain-text offsets; unknown ones are
+   * left out), and each one's live text — what its card's "now" reads.
    */
-  positionsOf(annotations: Annotation[]): {
-    positions: Map<string, number>;
-    carried: Set<string>;
-    /** each comment's live text — what its card's "now" should read */
-    live: Map<string, string>;
-  };
+  positionsOf(annotations: Annotation[]): { positions: Map<string, number>; live: Map<string, string> };
 }
 
 interface Props {
@@ -95,9 +87,11 @@ interface Props {
 }
 
 /**
- * Where a comment's passage is in the current doc: its tracked range, or —
- * for a passage the revision removed or rewrote — the change itself, found
- * in the baseline and carried across the diff.
+ * Where a comment's passage is in the current doc: the server's anchor
+ * (re-anchoring already follows rewrites and orphans deletions, using the
+ * revision's diff), with the passage's own struck text lit beside it; or,
+ * for an orphaned passage, the change that removed it, found in the
+ * baseline and carried across the diff.
  */
 function locate(view: EditorView, annotation: Annotation, index: OffsetIndex): Spotlight | null {
   const tracked = commentsKey
@@ -112,35 +106,7 @@ function locate(view: EditorView, annotation: Annotation, index: OffsetIndex): S
   const liveStart = rawStart + (raw.length - raw.trimStart().length);
   const liveEnd = Math.max(liveStart + 1, rawStart + raw.trimEnd().length);
   const live = { from: index.toPm(liveStart), to: index.toPm(liveEnd) };
-  if (was?.changed) {
-    // re-anchoring can carry a comment whose words the agent changed onto
-    // matching words elsewhere. A range (judged by its middle) in untouched
-    // text away from where the passage stood was carried off; one in added
-    // text is a rewrite or move — the block that replaced the passage where
-    // it stood, or else text that reads like the passage
-    const regions = changesKey.getState(view.state)!.regions;
-    const mapped = mapToBaseline(regions, Math.floor((liveStart + liveEnd) / 2));
-    if (mapped !== null && (mapped < was.start || mapped >= was.end)) return { ...was.spot, carried: true };
-    if (mapped === null) {
-      const rep = was.replacement;
-      // inside what replaced the passage: light that rewrite — itself, not
-      // however far the re-anchored quote stretched past it
-      if (rep !== null && liveStart < rep.end && liveEnd > rep.start) {
-        const repEnd = rep.start + index.text.slice(rep.start, rep.end).trimEnd().length;
-        // with the passage's own struck text (one of several a block replaced)
-        return { from: index.toPm(rep.start), to: index.toPm(repEnd), deletion: was.spot.deletion, inline: was.spot.inline };
-      }
-      const $live = view.state.doc.resolve(live.from);
-      // a word-level change: the live range belongs in the changed paragraph
-      if (was.removedBlock === null) {
-        if ($live.start() !== was.changedBlockStart) return { ...was.spot, carried: true };
-      } else if (blockSimilarity(was.removedBlock, $live.parent.textContent) < PAIR_THRESHOLD) {
-        // not its replacement, and nothing like it: carried off
-        return { ...was.spot, carried: true };
-      }
-    }
-  }
-  return live;
+  return was?.changed ? { ...live, deletion: was.spot.deletion, inline: was.spot.inline } : live;
 }
 
 /**
@@ -176,16 +142,8 @@ function locateInBaseline(view: EditorView, annotation: Annotation, index: Offse
       r.oldStart < found.end &&
       r.oldEnd > found.start,
   );
-  const span = { start: found.start, end: found.end };
   if (!region) {
-    return {
-      spot: { from: at, to: at },
-      changed: false,
-      ...span,
-      removedBlock: null,
-      replacement: null,
-      changedBlockStart: -1,
-    };
+    return { spot: { from: at, to: at } as Spotlight, changed: false };
   }
   const point = index.toPm(region.newStart);
   const isPureRemoval = (x: TrackedChange) => x.block && x.newStart === x.newEnd;
@@ -238,10 +196,6 @@ function locateInBaseline(view: EditorView, annotation: Annotation, index: Offse
       ? { from: index.toPm(added.start), to: index.toPm(repEnd), deletion: region.oldStart, inline: !region.block }
       : { from: point, to: point, deletion: region.oldStart, inline: !region.block },
     changed: hit.exact,
-    ...span,
-    removedBlock: pureRemoval ? baseline.text.slice(region.oldStart, region.oldEnd) : null,
-    replacement: added,
-    changedBlockStart: view.state.doc.resolve(point).start(),
   };
 }
 
@@ -512,9 +466,8 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
     positionsOf(annotations) {
       const view = viewRef.current;
       const out = new Map<string, number>();
-      const carried = new Set<string>();
       const live = new Map<string, string>();
-      if (!view) return { positions: out, carried, live };
+      if (!view) return { positions: out, live };
       const ranges = commentsKey.getState(view.state)?.ranges ?? [];
       for (const r of ranges) {
         if (!r.collapsed && r.from < r.to) live.set(r.id, view.state.doc.textBetween(r.from, r.to, "\n").trim());
@@ -524,7 +477,6 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
         const spot = locate(view, a, index);
         if (spot) {
           out.set(a.id, index.toText(spot.from));
-          if (spot.carried) carried.add(a.id);
           continue;
         }
         // gone and past the baseline: the text that led into it, if it
@@ -539,7 +491,7 @@ export const EditorPane = forwardRef<EditorHandle, Props>(function EditorPane(
         }
         if (best !== -1) out.set(a.id, best + lead.length);
       }
-      return { positions: out, carried, live };
+      return { positions: out, live };
     },
     setDraft(range) {
       const view = viewRef.current;

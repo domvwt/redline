@@ -5,9 +5,9 @@ export { createSpanMapper, diffRegions, type SpanMapper, type Region } from "./r
 export {
   trackChanges,
   mapFromBaseline,
-  mapToBaseline,
+  spanFate,
+  type SpanFate,
   blockSimilarity,
-  PAIR_THRESHOLD,
   ALIGN_EVIDENCE,
   type TrackedChange,
   type BlockLayout,

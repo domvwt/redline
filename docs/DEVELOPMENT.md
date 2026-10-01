@@ -35,7 +35,11 @@ assistants fit via the sidebar's copy-for-chat export.
 - **Anchor ladder**: position hint → exact quote match (context-disambiguated
   when the quote appears more than once) → fuzzy match (Hypothesis's
   `approx-string-match`, error budget ~20% of quote length) → visible
-  *Unanchored* state.
+  *Unanchored* state. When the daemon saw the edit happen (it holds the exact
+  prior text), the revision's block-aware diff decides first: unchanged
+  passages follow their offsets, rewritten ones map onto their replacement,
+  deleted ones unanchor — the ladder's exact find still wins where the
+  revision put text (a move, merge or split), never in untouched text.
 - **Quotes are from rendered text**: `**bold** word` anchors as `bold word`,
   so comments span formatting naturally. The agent is told this so it locates
   passages by meaning, not byte-exact search.

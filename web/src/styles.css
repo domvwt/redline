@@ -584,7 +584,7 @@ body {
    version just above it */
 .rl-spotlit .rl-editor .ProseMirror
   > :not(.rl-spot):not(.rl-spot-del):not(:has(.rl-spot-del)):not(.rl-del-replaced:has(+ .rl-spot)) {
-  opacity: 0.38;
+  opacity: 0.55;
 }
 /* inside a lit list or table, the items around the passage step back */
 .rl-spotlit .rl-editor .ProseMirror > .rl-spot :is(li, tr):not(:has(.rl-spot-in)),
@@ -597,13 +597,13 @@ body {
   > .rl-spot
   :is(ul, ol, tbody)
   > .rl-del-block:not(.rl-spot-del):not(.rl-del-replaced:has(+ :is(li, tr) .rl-spot-in)) {
-  opacity: 0.38;
+  opacity: 0.55;
 }
 /* inside the container holding struck text, its other parts step back */
 .rl-spotlit .rl-editor .ProseMirror
   > :has(.rl-spot-del)
   :is(li, tr, blockquote > *):not(:has(.rl-spot-del)):not(.rl-spot-del):not(.rl-spot-in):not(:has(.rl-spot-in)) {
-  opacity: 0.38;
+  opacity: 0.55;
 }
 .rl-focusing .rl-sidebar .rl-card:not(.focused) { opacity: 0.4; }
 .rl-focusing .rl-tree { opacity: 0.55; }

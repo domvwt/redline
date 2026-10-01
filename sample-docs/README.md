@@ -156,7 +156,11 @@ is quote-based with fuzzy matching, so comments survive edits around and even
 * **Anchor ladder**: position hint → exact quote match (context-disambiguated
   when the quote appears more than once) → fuzzy match (Hypothesis's
   `approx-string-match`, error budget \~20% of quote length) → visible
-  *Unanchored* state.
+  *Unanchored* state. When the daemon saw the edit happen (it holds the exact
+  prior text), the revision's block-aware diff decides first: unchanged
+  passages follow their offsets, rewritten ones map onto their replacement,
+  deleted ones unanchor — the ladder's exact find still wins where the
+  revision put text (a move, merge or split), never in untouched text.
 
 * **Quotes are from rendered text**: `**bold** word` anchors as `bold word`,
   so comments span formatting naturally. Claude is told this so it locates
@@ -187,9 +191,11 @@ skill) · `sample-docs/` (playground).
 * **Browser not updating live** — the SSE connection drops if the daemon
   restarts; refresh the page.
 
-* **A comment unanchored unexpectedly** — the passage was probably rewritten
-  wholesale (rewrites beyond \~20% of the quote defeat fuzzy matching, by
-  design). The quote is preserved on the card; re-comment on the new text.
+* **A comment unanchored unexpectedly** — the passage was probably deleted,
+  or rewritten wholesale by something other than the running agent's edit
+  (redline follows a rewrite when it sees the edit happen; otherwise rewrites
+  beyond \~20% of the quote defeat fuzzy matching, by design). The quote is
+  preserved on the card; re-comment on the new text.
 
 * **409 "document changed on disk"** — you edited in the browser while the
   file changed underneath (rare; external edits normally reload live).

@@ -33,8 +33,6 @@ export interface Spotlight {
   deletion?: number;
   /** the change sits inside a paragraph, not a removed block of its own */
   inline?: boolean;
-  /** re-anchoring had carried the comment off its passage onto other text */
-  carried?: boolean;
 }
 
 /** Plugin key for reading the comments state and sending it meta. */

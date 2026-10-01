@@ -3,6 +3,7 @@ import {
   authorReply,
   certifyPositionHints,
   emptySidecar,
+  markdownToPlainBlocks,
   markdownToPlainText,
   newAnnotation,
   PatchError,
@@ -108,6 +109,7 @@ function emit(event: ServerEvent): void {
   channel?.postMessage(event);
 }
 
+/** Listen for this tab's (and other tabs') store events; returns unsubscribe. */
 export const subscribeEvents: SubscribeEvents = (handlers) => {
   listeners.add(handlers.onEvent);
   return () => listeners.delete(handlers.onEvent);
@@ -190,16 +192,18 @@ async function reanchorDoc(
     const markdown = await readDoc(path);
     const hash = await hashOf(markdown);
     if (sidecar.docHash === hash && !anchors) return;
-    const priorPlain =
+    const now = markdownToPlainBlocks(markdown);
+    const before =
       priorMarkdown !== undefined && (await hashOf(priorMarkdown)) === sidecar.docHash
-        ? markdownToPlainText(priorMarkdown)
+        ? markdownToPlainBlocks(priorMarkdown)
         : null;
-    reanchorAnnotations(sidecar, markdownToPlainText(markdown), hash, anchors, priorPlain);
+    reanchorAnnotations(sidecar, now.text, hash, anchors, before?.text ?? null, before ? { prior: before, now } : undefined);
     await saveSidecar(path, sidecar);
     emit({ type: "comments:changed", path });
   });
 }
 
+/** The RedlineApi backed by browser storage (static build, no server). */
 export const api: RedlineApi = {
   tree: async () => {
     await ensureSeed();

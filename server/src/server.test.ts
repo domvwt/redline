@@ -187,8 +187,8 @@ describe("terminal-Claude workflow (external edits + resolution)", () => {
     const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
     expect(stored.status).toBe("open");
     expect(stored.priorQuote?.exact).toBe("explains the setup");
-    // the shared trailing "." aligns as unchanged, so it stays outside the span
-    expect(stored.target!.selector[0].exact).toBe(newSentence.slice(0, -1));
+    // a wholesale rewrite maps the passage onto its whole replacement block
+    expect(stored.target!.selector[0].exact).toBe(newSentence);
   });
 
   it("chains diff re-anchoring across successive review rounds", async () => {
@@ -226,7 +226,7 @@ describe("terminal-Claude workflow (external edits + resolution)", () => {
       const { json } = await api("GET", "/api/comments?path=guide.md");
       const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
       expect(stored.status).toBe("open");
-      expect(stored.target!.selector[0].exact).toBe(sentence.slice(0, -1));
+      expect(stored.target!.selector[0].exact).toBe(sentence);
       previous = sentence;
     }
 
@@ -287,7 +287,7 @@ describe("terminal-Claude workflow (external edits + resolution)", () => {
     const { json } = await api("GET", "/api/comments?path=guide.md");
     const stored = (json as Sidecar).annotations.find((a) => a.id === (ann as Annotation).id)!;
     expect(stored.status).toBe("open");
-    expect(stored.target!.selector[0].exact).toBe(newSentence.slice(0, -1));
+    expect(stored.target!.selector[0].exact).toBe(newSentence);
     // the author's own save is not an agent revision — no was/now snapshot
     expect(stored.priorQuote ?? null).toBeNull();
   });

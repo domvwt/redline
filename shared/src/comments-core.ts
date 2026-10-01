@@ -1,5 +1,12 @@
 import { makeQuoteSelector, resolveAnchor } from "./anchor-core.ts";
-import { createSpanMapper, type SpanMapper } from "./revision-map.ts";
+import {
+  blockSimilarity,
+  spanFate,
+  trackChanges,
+  type BlockLayout,
+  type SpanFate,
+  type TrackedChange,
+} from "./track-changes.ts";
 import type { Annotation, ResolutionAction, Sidecar } from "./types.ts";
 import { PROJECT_PATH } from "./types.ts";
 
@@ -22,14 +29,17 @@ export class LifecycleError extends Error {}
 /** Invalid author patch (bad reply index, editing someone else's reply). */
 export class PatchError extends Error {}
 
+/** A sidecar with no comments, not yet certified against any text. */
 export function emptySidecar(docPath: string): Sidecar {
   return { version: 1, docPath, docHash: "", annotations: [] };
 }
 
+/** Stamp the annotation's modified time. */
 export function touchAnnotation(a: Annotation): void {
   a.modified = new Date().toISOString();
 }
 
+/** A fresh open comment, anchored to `selector` (null: document-level). */
 export function newAnnotation(
   id: string,
   body: string,
@@ -151,6 +161,7 @@ export function authorReply(annotation: Annotation, text: string): { wasClosed: 
   return { wasClosed };
 }
 
+/** Fields an author may change on a comment (see applyAuthorPatch). */
 export interface AuthorPatch {
   body?: string;
   status?: "open" | "resolved";
@@ -239,15 +250,13 @@ export function reanchorAnnotation(plain: string, annotation: Annotation): void 
  *
  * When the caller knows the exact text the stored positions refer to (it must
  * verify hashOf(priorMarkdown) === sidecar.docHash before passing its plain
- * text as `priorPlain`), a diff of old vs new maps each span to whatever
- * replaced it. That tier runs only where the quote-search ladder fails: while
- * the quote's text survives anywhere (light edit, verbatim move), the ladder's
- * context-scored search is authoritative — a word diff aligns on shared
- * stopwords, so it would misattribute a moved passage to whatever landed in
- * its old spot. The mapper rescues what the ladder would orphan: full
- * rephrasings ("my name is" → "I am called"). Spans it rejects — deleted
- * outright, absorbed into a whole-document rewrite, or too costly to diff —
- * stay orphaned as before, so nothing that anchored previously regresses.
+ * text as `priorPlain`, with both block `layouts` when it has them), the
+ * revision's diff decides each certified span's fate (see spanFate): kept
+ * spans follow the arithmetic, rewritten ones map onto their replacement,
+ * deleted ones orphan — except that the quote ladder's (near-)exact re-find
+ * wins wherever the revision put text there (a move, merge, split or
+ * reorder). A find in text the revision left untouched is another passage
+ * with the same words, and doesn't.
  */
 export function reanchorAnnotations(
   sidecar: Sidecar,
@@ -255,10 +264,11 @@ export function reanchorAnnotations(
   hash: string,
   clientAnchors?: Array<{ id: string; start: number; end: number }>,
   priorPlain?: string | null,
+  layouts?: { prior: BlockLayout; now: BlockLayout },
 ): number {
   const byId = new Map((clientAnchors ?? []).map((c) => [c.id, c]));
-  let mapSpan: SpanMapper | null = null;
-  const mapper = (): SpanMapper => (mapSpan ??= createSpanMapper(priorPlain!, plain));
+  let revision: TrackedChange[] | null = null;
+  const changes = () => (revision ??= trackChanges(priorPlain!, plain, layouts?.prior, layouts?.now));
   let orphans = 0;
   for (const a of sidecar.annotations) {
     // "addressed" is frozen like "resolved": demoting a pending proposal to
@@ -280,24 +290,31 @@ export function reanchorAnnotations(
       start = client.start;
       end = client.end;
     } else {
+      // positions must still reproduce the quote: they may predate the prior
+      // text (e.g. reopened after being skipped as "addressed")
+      const certified = priorPlain != null && priorPlain.slice(position.start, position.end) === quote.exact;
+      const fate: SpanFate | null = certified
+        ? spanFate(changes(), priorPlain!, plain, position.start, position.end)
+        : null;
       const result = resolveAnchor(plain, a);
-      if (result) {
-        start = result.start;
-        end = result.end;
-      } else if (
-        // rescue tier: the quote's text is gone, so map its stored span
-        // through the revision diff to whatever replaced it. The certified-
-        // prior gate covers the sidecar, not this annotation: its own
-        // positions may still predate the prior text (e.g. reopened after
-        // being skipped as "addressed"), so require they reproduce the quote.
-        priorPlain != null &&
-        priorPlain.slice(position.start, position.end) === quote.exact
-      ) {
-        const mapped = mapper()(position.start, position.end);
-        if (mapped) {
-          start = mapped.start;
-          end = mapped.end;
-        }
+      // the ladder's (near-)exact find stands where the revision put text
+      // there — a move, merge, split or reorder; the same words in text the
+      // revision left untouched are another passage, so the diff decides
+      const found = result ? plain.slice(result.start, result.end) : "";
+      const exactFind =
+        result !== null &&
+        (found === quote.exact || blockSimilarity(quote.exact, found) >= 0.6) &&
+        (fate === null ||
+          changes().some((c) => c.newStart < c.newEnd && c.newStart < result.end && c.newEnd > result.start));
+      const use =
+        fate?.kind === "kept" ? fate
+        : exactFind ? result
+        : fate?.kind === "rewritten" ? fate
+        : fate?.kind === "deleted" ? null
+        : result;
+      if (use) {
+        start = use.start;
+        end = use.end;
       }
     }
 

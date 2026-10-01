@@ -1,4 +1,4 @@
-import { markdownToPlainText, reanchorAnnotations, snapshotPriorQuotes } from "@redline/shared";
+import { markdownToPlainBlocks, reanchorAnnotations, snapshotPriorQuotes } from "@redline/shared";
 import { DocStore, hashOf } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { loadSidecar, saveSidecar, withSidecarLock } from "./sidecar.ts";
@@ -32,14 +32,15 @@ export async function reanchorFile(
     if (opts.snapshotPrior) snapshotPriorQuotes(sidecar);
     // a prior certified against the sidecar's docHash unlocks diff-based
     // span mapping, which survives rewrites the quote ladder cannot find
-    const priorPlain =
-      prior !== undefined && hashOf(prior) === sidecar.docHash ? markdownToPlainText(prior) : null;
+    const now = markdownToPlainBlocks(markdown);
+    const before = prior !== undefined && hashOf(prior) === sidecar.docHash ? markdownToPlainBlocks(prior) : null;
     const orphans = reanchorAnnotations(
       sidecar,
-      markdownToPlainText(markdown),
+      now.text,
       hash,
       clientAnchors,
-      priorPlain,
+      before?.text ?? null,
+      before ? { prior: before, now } : undefined,
     );
     await saveSidecar(docs.root, relPath, sidecar);
     hub?.broadcast({ type: "comments:changed", path: relPath });

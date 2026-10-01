@@ -426,9 +426,9 @@ export function trackChanges(
     };
     /**
      * In order — but with more removed than added, each added block takes the
-     * first removed block of its kind in reach (skipped ones stay deletions),
-     * else the last (a list rewritten as one paragraph keeps its struck items
-     * together above it)
+     * first removed block of its kind in reach (skipped ones stay deletions:
+     * a rewrite next to a deleted paragraph), else the last (a list rewritten
+     * as one paragraph keeps its struck items together above it)
      */
     const fillInOrder = (r0: number, r1: number, a0: number, a1: number, into: Array<[number, number]>) => {
       if (r1 <= r0 || a1 <= a0) return;
@@ -556,4 +556,56 @@ export function mapToBaseline(changes: TrackedChange[], offset: number): number 
     delta = c.oldEnd - c.newEnd;
   }
   return offset + delta;
+}
+
+/** What a revision did to an old span: kept (moved by edits around it),
+ *  rewritten (into the text that replaced it), or deleted outright. */
+export type SpanFate =
+  | { kind: "kept" | "rewritten"; start: number; end: number }
+  | { kind: "deleted" };
+
+/**
+ * The fate of the old span [start, end) under `changes`, with its new
+ * location. A span no change touches keeps its words exactly; one whose
+ * words a change removed maps to what replaced them — the change's own added
+ * text, or for a removed block, the block added straight after it — and is
+ * deleted when nothing did and none of its words survive.
+ */
+export function spanFate(
+  changes: TrackedChange[],
+  oldText: string,
+  newText: string,
+  start: number,
+  end: number,
+): SpanFate {
+  const hit = changes.filter((c) => c.oldStart < c.oldEnd && c.oldStart < end && c.oldEnd > start);
+  if (!hit.length) {
+    return { kind: "kept", start: mapFromBaseline(changes, start), end: mapFromBaseline(changes, end - 1) + 1 };
+  }
+  const replacementOf = (c: TrackedChange): [number, number] | null => {
+    if (c.newEnd > c.newStart) return [c.newStart, c.newEnd];
+    const next = changes[changes.indexOf(c) + 1];
+    const replaced =
+      c.block &&
+      next?.block &&
+      next.oldStart === next.oldEnd &&
+      next.newStart === c.newStart &&
+      newText.slice(next.newStart, next.newEnd).trim() !== "";
+    return replaced ? [next.newStart, next.newEnd] : null;
+  };
+  const reps = hit.map(replacementOf);
+  // do any of its words lie outside every change that removed text?
+  let survives = false;
+  for (let k = start, h = 0; k < end && !survives; k++) {
+    while (h < hit.length && hit[h].oldEnd <= k) h++;
+    const inside = h < hit.length && hit[h].oldStart <= k;
+    if (!inside && /\S/.test(oldText[k])) survives = true;
+  }
+  if (!survives && reps.every((r) => r === null)) return { kind: "deleted" };
+  const first = hit[0];
+  const last = hit[hit.length - 1];
+  const newStart = start >= first.oldStart ? (reps[0]?.[0] ?? first.newStart) : mapFromBaseline(changes, start);
+  let newEnd = end <= last.oldEnd ? (reps[reps.length - 1]?.[1] ?? last.newStart) : mapFromBaseline(changes, end - 1) + 1;
+  while (newEnd > newStart && /\s/.test(newText[newEnd - 1])) newEnd--;
+  return newEnd > newStart ? { kind: "rewritten", start: newStart, end: newEnd } : { kind: "deleted" };
 }

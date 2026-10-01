@@ -245,9 +245,11 @@ redline itself: see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
   resyncs by itself, including across a redline restart. If a page somehow
   stays stale, a refresh is never wrong.
 
-* **A comment unanchored unexpectedly** — the passage was probably rewritten
-  wholesale (rewrites beyond \~20% of the quote defeat fuzzy matching, by
-  design). The quote is preserved on the card; re-comment on the new text.
+* **A comment unanchored unexpectedly** — the passage was probably deleted,
+  or rewritten wholesale by something other than the running agent's edit
+  (redline follows a rewrite when it sees the edit happen; otherwise rewrites
+  beyond \~20% of the quote defeat fuzzy matching, by design). The quote is
+  preserved on the card; re-comment on the new text.
 
 * **A document renders oddly** — redline renders CommonMark + GFM, the same
   dialect GitHub uses. Content outside it (YAML frontmatter, MDX, …) shows

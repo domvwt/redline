@@ -479,11 +479,10 @@ export function App() {
   const needsAttention = (a: Annotation) => a.status !== "resolved";
   // where passages are now: stored offsets go stale for orphaned and
   // addressed comments once later text moves
-  const { positions, carried, live } = useMemo(
+  const { positions, live } = useMemo(
     () =>
       editorRef.current?.positionsOf(annotations) ?? {
         positions: new Map<string, number>(),
-        carried: new Set<string>(),
         live: new Map<string, string>(),
       },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -845,11 +844,8 @@ export function App() {
         hasOpenDoc={path !== null}
         focusedId={focusedId}
         focusTick={focusTick}
-        // a carried-off comment's live quote isn't the change: no was/now either
         commentsWithChanges={
-          baselineState === "loading"
-            ? null
-            : new Set([...(view === "editor" ? commentsWithChanges : []), ...carried])
+          baselineState === "loading" ? null : new Set(view === "editor" ? commentsWithChanges : [])
         }
         liveQuotes={live}
         onAddNote={addNote}

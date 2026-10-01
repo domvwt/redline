@@ -144,6 +144,47 @@ describe("reanchorAnnotations with a certified prior text", () => {
     expect(pos.start).toBeGreaterThan(newText.indexOf(B));
   });
 
+  it("orphans a short passage whose paragraph was deleted, instead of fuzzily carrying it", () => {
+    const oldText = "Plan\nAlpha paragraph here.\nBravo paragraph\nCharlie paragraph stays.";
+    const newText = "Plan\nAlpha paragraph here.\nCharlie paragraph stays.";
+    const sidecar = emptySidecar("doc.md");
+    const a = commentOn(oldText, "Bravo paragraph");
+    sidecar.annotations.push(a);
+
+    reanchorAnnotations(sidecar, newText, "h2", undefined, oldText);
+
+    expect(a.status).toBe("orphaned");
+  });
+
+  it("orphans a word in a deleted paragraph rather than following an untouched copy", () => {
+    const oldText = "We use Postgres for storage.\nPostgres replicas lag under heavy load.\nBackups run nightly.";
+    const newText = "We use Postgres for storage.\nBackups run nightly.";
+    const start = oldText.indexOf("Postgres", 10); // the second, in the deleted paragraph
+    const sidecar = emptySidecar("doc.md");
+    const a = newAnnotation("c2", "name the version", {
+      quote: { exact: "Postgres", prefix: oldText.slice(start - 32, start), suffix: oldText.slice(start + 8, start + 40) },
+      position: { start, end: start + 8 },
+    });
+    sidecar.annotations.push(a);
+
+    reanchorAnnotations(sidecar, newText, "h2", undefined, oldText);
+
+    expect(a.status).toBe("orphaned");
+  });
+
+  it("follows a swapped word to its replacement, not to the same word elsewhere", () => {
+    const oldText = "The session cache layer is Redis, sized for peak.\nRate limiting counters also live in Redis today.";
+    const newText = "The session cache layer is Memcached, sized for peak.\nRate limiting counters also live in Redis today.";
+    const sidecar = emptySidecar("doc.md");
+    const a = commentOn(oldText, "Redis");
+    sidecar.annotations.push(a);
+
+    reanchorAnnotations(sidecar, newText, "h2", undefined, oldText);
+
+    expect(a.status).toBe("open");
+    expect(a.target?.selector[0].exact).toBe("Memcached");
+  });
+
   it("clears priorQuote when a note-less self-resolve is reopened by reply", () => {
     const a = commentOn(OLD, "my name is");
     a.priorQuote = { ...a.target!.selector[0] };
