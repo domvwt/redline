@@ -9,16 +9,19 @@ import { atomicWrite, loadSidecar } from "./sidecar.ts";
 
 /**
  * The "send to agent" link, on the filesystem like everything else: the
- * daemon writes handoff.json when the author clicks Send/Done; an agent
+ * daemon writes handoff.json when the author clicks Send/Done/Drop; an agent
  * blocked in `redline wait` writes agent.json. The two never talk directly.
  */
 
 interface HandoffFile {
   /** bumped on every click */
   seq: number;
-  action: "send" | "done";
+  /** drop: the author withdrew a send nobody picked up */
+  action: "send" | "done" | "drop";
   /** seq of the latest send, so a Done clicked after a queued send can't swallow it */
   sendSeq?: number;
+  /** sendSeq of the latest dropped send: no wait, first or re-arm, runs it */
+  dropped?: number;
   /** a second Done while the agent was still "stopping": it isn't coming back */
   force?: boolean;
   at: string;
@@ -60,8 +63,14 @@ const FORCE_AFTER_MS = 10_000;
 const handoffFile = (root: string) => path.join(root, ".redline", "handoff.json");
 const agentFile = (root: string) => path.join(root, ".redline", "agent.json");
 
-const sendSeqOf = (h: HandoffFile | null): number =>
-  h?.sendSeq ?? (h?.action === "send" ? h.seq : 0);
+/** the latest send's seq, dropped or not */
+const lastSendSeq = (h: HandoffFile | null): number => h?.sendSeq ?? (h?.action === "send" ? h.seq : 0);
+
+/** the latest send still to run (0 once dropped) */
+const sendSeqOf = (h: HandoffFile | null): number => {
+  const sendSeq = lastSendSeq(h);
+  return sendSeq > (h?.dropped ?? 0) ? sendSeq : 0;
+};
 
 async function readJson<T>(file: string): Promise<T | null> {
   try {
@@ -153,13 +162,22 @@ async function roundProgress(root: string, agent: AgentFile): Promise<AgentStatu
 // serialised: two tabs clicking at once would otherwise lose a seq bump
 let handoffChain: Promise<unknown> = Promise.resolve();
 
-/** Author clicked Send (or Done): wake whichever `redline wait` is listening. */
+/**
+ * Author clicked Send (or Done): wake whichever `redline wait` is listening.
+ * Drop withdraws a send nobody is listening for, without ending a loop that
+ * comes back later.
+ */
 export function sendHandoff(root: string, action: HandoffFile["action"]): Promise<void> {
   const next = handoffChain.then(async () => {
     const [current, agent] = await Promise.all([
       readJson<HandoffFile>(handoffFile(root)),
       readJson<AgentFile>(agentFile(root)),
     ]);
+    if (action === "drop" && current?.action === "done" && current.seq > (agent?.consumed ?? 0)) {
+      // a Done no wait has seen yet (another tab's) still ends the loop
+      await writeJson(handoffFile(root), { ...current, dropped: lastSendSeq(current) } satisfies HandoffFile);
+      return;
+    }
     const seq = (current?.seq ?? 0) + 1;
     // Done again while still waiting on the first: the agent died mid-pass
     const force =
@@ -168,10 +186,13 @@ export function sendHandoff(root: string, action: HandoffFile["action"]): Promis
       current.seq > (agent?.consumed ?? 0) &&
       agent?.state === "working" &&
       Date.now() - Date.parse(current.at) >= FORCE_AFTER_MS;
+    const sendSeq = action === "send" ? seq : lastSendSeq(current);
+    const dropped = action === "drop" ? sendSeq : current?.dropped;
     await writeJson(handoffFile(root), {
       seq,
       action,
-      sendSeq: action === "send" ? seq : sendSeqOf(current),
+      sendSeq,
+      ...(dropped ? { dropped } : {}),
       ...(force ? { force } : {}),
       at: new Date().toISOString(),
     } satisfies HandoffFile);

@@ -46,7 +46,7 @@ export function AgentBar({
   readyCount: number;
   onNotice: (message: string) => void;
 }) {
-  const [busy, setBusy] = useState<"send" | "done" | null>(null);
+  const [busy, setBusy] = useState<"send" | "done" | "drop" | null>(null);
   const [collapsed, setCollapsed] = useState(() => readValue(COLLAPSED_KEY) === "1");
   // the session whose "Agent stopped" was dismissed: the next session's shows
   const [dismissedSession, setDismissedSession] = useState(() => readValue(DISMISSED_KEY));
@@ -82,7 +82,7 @@ export function AgentBar({
     !status.stopping &&
     ((status.state === "listening" && readyCount > 0) || (status.state === "working" && unsent > 0));
 
-  const handoff = async (action: "send" | "done") => {
+  const handoff = async (action: "send" | "done" | "drop") => {
     setBusy(action);
     try {
       await api.sendHandoff!(action);
@@ -147,7 +147,8 @@ export function AgentBar({
   };
 
   const copyCommand = () => {
-    navigator.clipboard.writeText(START_COMMAND).then(
+    // navigator.clipboard is undefined outside a secure context
+    (navigator.clipboard?.writeText(START_COMMAND) ?? Promise.reject()).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -314,13 +315,14 @@ export function AgentBar({
     );
   }
 
-  // Done means something while an agent could act on it; a second one gives
-  // up on an agent that died mid-pass, and with none, it drops a stranded send
+  // Done means something while an agent could act on it, and a second one gives
+  // up on an agent that died mid-pass; with none, Drop withdraws a stranded send
   const stopItem = status.stopping
-    ? { label: "Stop waiting", hint: "Treat the agent as stopped — for when its session has ended." }
+    ? { action: "done" as const, label: "Stop waiting", hint: "Treat the agent as stopped — for when its session has ended." }
     : status.state === "absent"
-      ? { label: "Drop the send", hint: "Nobody will pick it up. Your comments stay as they are." }
+      ? { action: "drop" as const, label: "Drop the send", hint: "Nobody will pick it up. Your comments stay as they are." }
       : {
+          action: "done" as const,
           label: "Done for now",
           hint: "The agent finishes what it's doing, then stops listening. Comments stay as they are.",
         };
@@ -360,7 +362,7 @@ export function AgentBar({
                     onClick={() => {
                       setMenuOpen(false);
                       moreBtnRef.current?.focus();
-                      void handoff("done");
+                      void handoff(stopItem.action);
                     }}
                   >
                     <b>{stopItem.label}</b>

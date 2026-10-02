@@ -60,7 +60,7 @@ export interface RedlineApi {
   /** daemon only: is an agent waiting in `redline wait`? */
   agentStatus?(): Promise<AgentStatus>;
   /** daemon only: wake the waiting agent for a round (send), or end its loop (done) */
-  sendHandoff?(action: "send" | "done"): Promise<AgentStatus>;
+  sendHandoff?(action: "send" | "done" | "drop"): Promise<AgentStatus>;
 }
 
 export type SubscribeEvents = (handlers: {

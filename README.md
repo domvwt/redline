@@ -24,7 +24,7 @@ See [The web version](#the-web-version-no-install) below.
 > install redline from https://github.com/domvwt/redline and start it in my
 > documents folder
 
-**By hand** — one-time, from a clone of this repo:
+**By hand** — one-time, from a clone of this repo (Node 20.19+, 22.13+ or 24+):
 
 ```sh
 npm install
@@ -194,7 +194,9 @@ proposal it has just made, **Queue** hands them over as the next round —
 their cards read *next round* — picked up as soon as the current pass ends.
 Even if you click Done for now after it, the queued round runs first. With no
 agent connected, the bar's button copies `/redline-comments` for you to
-start one.
+start one; a send nobody picked up reads *Nobody listening*, and **Drop the
+send** in the ⋯ menu withdraws it, so an agent that comes back later doesn't
+run that round.
 
 Agents that can't run background commands do one pass per request, as before.
 Any agent can use the same loop by running `redline wait [docs-dir]` itself

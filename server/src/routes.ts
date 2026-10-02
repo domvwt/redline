@@ -91,6 +91,7 @@ async function jsonBody(c: Context): Promise<unknown> {
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
+/** The daemon's HTTP API over `docs`, broadcasting changes on `hub`. */
 export function buildApp(docs: DocStore, hub: EventHub): Hono {
   const app = new Hono();
 
@@ -350,7 +351,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   app.get("/api/agent", async (c) => c.json(await agentStatus(docs.root)));
 
   app.post("/api/handoff", async (c) => {
-    const { action } = z.object({ action: z.enum(["send", "done"]) }).parse(await jsonBody(c));
+    const { action } = z.object({ action: z.enum(["send", "done", "drop"]) }).parse(await jsonBody(c));
     await sendHandoff(docs.root, action);
     const status = await agentStatus(docs.root);
     hub.broadcast({ type: "agent:changed", status });

@@ -340,6 +340,15 @@ describe("handoff routes", () => {
     const status = await app.request("http://127.0.0.1/api/agent");
     expect(await status.json()).toMatchObject({ state: "absent", pending: true, finished: false });
 
+    const drop = await app.request("http://127.0.0.1/api/handoff", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "drop" }),
+    });
+    expect(await drop.json()).toMatchObject({ state: "absent", pending: false, finished: false });
+    const dropped = JSON.parse(await fs.readFile(path.join(root, ".redline", "handoff.json"), "utf8"));
+    expect(dropped).toMatchObject({ seq: 2, action: "drop", sendSeq: 1, dropped: 1 });
+
     const bad = await app.request("http://127.0.0.1/api/handoff", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -498,6 +507,38 @@ describe("round bookkeeping", () => {
     await sendHandoff(root, "send");
     await sendHandoff(root, "done");
     expect(await agentStatus(root)).toMatchObject({ state: "absent", pending: false, finished: false });
+  });
+
+  it("a dropped send stays dropped: a --resume re-arm keeps listening, and a later Send still wakes it", async () => {
+    await writeAgent({ state: "absent", pid: null, consumed: 0, at: new Date().toISOString(), rounds: 2 });
+    await sendHandoff(root, "send");
+    expect(await agentStatus(root)).toMatchObject({ state: "absent", pending: true });
+    await sendHandoff(root, "drop");
+    expect(await agentStatus(root)).toMatchObject({ state: "absent", pending: false, finished: false });
+
+    expect((await runWait(root, { ...SHORT, resume: true })).kind).toBe("timeout");
+    const waiting = runWait(root, { ...FAST, resume: true });
+    await expect.poll(() => agentStatus(root)).toMatchObject({ state: "listening", pending: false });
+    await sendHandoff(root, "send");
+    expect((await waiting).kind).toBe("sent");
+    expect((await agentStatus(root)).rounds).toBe(3);
+  });
+
+  it("a Drop racing another tab's Done keeps the Done, and still drops the round", async () => {
+    await writeAgent({ state: "absent", pid: null, consumed: 0, at: new Date().toISOString() });
+    await sendHandoff(root, "send");
+    await sendHandoff(root, "done");
+    await sendHandoff(root, "drop");
+    expect((await runWait(root, { ...FAST, resume: true })).kind).toBe("done");
+    expect((await readAgent()).round).toBeUndefined();
+  });
+
+  it("a Done after a dropped send still ends a re-armed loop", async () => {
+    await writeAgent({ state: "absent", pid: null, consumed: 0, at: new Date().toISOString() });
+    await sendHandoff(root, "send");
+    await sendHandoff(root, "drop");
+    await sendHandoff(root, "done");
+    expect((await runWait(root, { ...FAST, resume: true })).kind).toBe("done");
   });
 
   it("a send with nothing open neither bumps rounds nor replaces the round", async () => {

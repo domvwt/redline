@@ -55,8 +55,11 @@ assistants fit via the sidebar's copy-for-chat export.
   daemon, which notices via its watcher — the two never talk directly.
 - **Agent link**: the browser's *Send to agent* reaches the agent through
   two files in `.redline/`. Only the daemon writes `handoff.json`
-  (`{seq, action, sendSeq, force?, at}`: `seq` bumps on every Send/Done click,
-  `sendSeq` is the latest Send's, so a Done can't swallow a queued round);
+  (`{seq, action, sendSeq, dropped?, force?, at}`: `seq` bumps on every
+  Send/Done/Drop click, `sendSeq` is the latest Send's, so a Done can't
+  swallow a queued round, and `dropped` is the `sendSeq` the author withdrew
+  with *Drop the send* — no wait runs it, but the loop isn't ended, and a
+  Drop landing on a Done no wait has seen keeps the Done);
   only `redline wait` writes `agent.json` (`{state, pid, owner, consumed,
   at, round, roundAt, rounds, session}`: `owner` is per-wait, so a newer
   wait supersedes an older one; `session` is per agent session, carried by
@@ -91,7 +94,7 @@ assistants fit via the sidebar's copy-for-chat export.
 ## Working on redline
 
 ```sh
-npm test                             # anchoring + API/workflow tests
+npm test                             # anchoring + API/workflow + agent bar (jsdom) tests
 npm run dev                          # daemon :5175 (sample-docs) + vite :5174 (HMR)
 REDLINE_ROOT=~/my/docs npm run dev   # point the dev daemon elsewhere
 ```
