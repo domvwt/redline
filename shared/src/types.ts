@@ -84,6 +84,22 @@ export interface TreeEntry {
   agentReady: number;
 }
 
+/**
+ * listening — an agent is blocked in `redline wait`, ready for a handoff
+ * working   — the agent picked up a handoff and is addressing comments
+ * absent    — no agent waiting (never started, finished, or gone)
+ */
+export type AgentState = "listening" | "working" | "absent";
+
+export interface AgentStatus {
+  state: AgentState;
+  /** the author sent a review the agent hasn't picked up yet */
+  pending: boolean;
+  /** the last action was Done and no agent is listening or working */
+  finished: boolean;
+}
+
 export type ServerEvent =
   | { type: "doc:changed"; path: string; hash: string; source: "editor" | "external" }
-  | { type: "comments:changed"; path: string };
+  | { type: "comments:changed"; path: string }
+  | { type: "agent:changed"; status: AgentStatus };

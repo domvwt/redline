@@ -1,0 +1,280 @@
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import type { AgentStatus } from "@redline/shared";
+import { listOpenComments } from "./comments-service.ts";
+import { DocStore } from "./docs.ts";
+import { EventHub } from "./events.ts";
+import { atomicWrite } from "./sidecar.ts";
+
+/**
+ * The "send to agent" link, on the filesystem like everything else: the
+ * daemon writes handoff.json when the author clicks Send/Done; an agent
+ * blocked in `redline wait` writes agent.json. The two never talk directly.
+ */
+
+interface HandoffFile {
+  /** bumped on every click */
+  seq: number;
+  action: "send" | "done";
+  /** seq of the latest send, so a Done clicked after a queued send can't swallow it */
+  sendSeq?: number;
+  at: string;
+}
+
+interface AgentFile {
+  /** finished: a wait ended the loop on the author's Done */
+  state: "listening" | "working" | "absent" | "finished";
+  /** liveness only — pids can collide across sandboxes, so ownership uses `owner` */
+  pid: number | null;
+  /** the wait that last claimed the file */
+  owner?: string;
+  /** handoff seq the agent has caught up to */
+  consumed: number;
+  /** refreshed every HEARTBEAT_MS while listening */
+  at: string;
+}
+
+const HEARTBEAT_MS = 30_000;
+/** a listener this quiet is gone, even if its pid was since reused */
+const LISTENING_STALE_MS = 3 * HEARTBEAT_MS;
+/** a pass that outlives this is assumed abandoned (agent killed mid-work) */
+const WORKING_STALE_MS = 2 * 60 * 60 * 1000;
+
+const handoffFile = (root: string) => path.join(root, ".redline", "handoff.json");
+const agentFile = (root: string) => path.join(root, ".redline", "agent.json");
+
+const sendSeqOf = (h: HandoffFile | null): number =>
+  h?.sendSeq ?? (h?.action === "send" ? h.seq : 0);
+
+async function readJson<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8")) as T;
+  } catch {
+    return null; // missing, or torn by a hand edit — treat as never written
+  }
+}
+
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await atomicWrite(file, JSON.stringify(value, null, 2) + "\n");
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // exists, not ours
+  }
+}
+
+/** What the browser header shows: is an agent waiting, working, or gone? */
+export async function agentStatus(root: string): Promise<AgentStatus> {
+  const [handoff, agent] = await Promise.all([
+    readJson<HandoffFile>(handoffFile(root)),
+    readJson<AgentFile>(agentFile(root)),
+  ]);
+  const consumed = agent?.consumed ?? 0;
+  // Done clears the header even if no agent will ever re-arm to see it; a
+  // live agent still runs a queued round before it stops (see runWait)
+  const stopped = handoff?.action === "done" && handoff.seq > consumed;
+  const pending = !stopped && sendSeqOf(handoff) > consumed;
+  const age = agent ? Date.now() - Date.parse(agent.at) : Infinity;
+  let state: AgentStatus["state"] = "absent";
+  if (agent?.state === "listening" && agent.pid !== null && age < LISTENING_STALE_MS && isAlive(agent.pid)) {
+    state = "listening";
+  } else if (agent?.state === "working" && age < WORKING_STALE_MS && !stopped) {
+    state = "working";
+  }
+  // a session that listened after the Done (and then left) isn't "finished"
+  const finished = state === "absent" && (stopped || agent?.state === "finished");
+  return { state, pending, finished };
+}
+
+// serialised: two tabs clicking at once would otherwise lose a seq bump
+let handoffChain: Promise<unknown> = Promise.resolve();
+
+/** Author clicked Send (or Done): wake whichever `redline wait` is listening. */
+export function sendHandoff(root: string, action: HandoffFile["action"]): Promise<void> {
+  const next = handoffChain.then(async () => {
+    const current = await readJson<HandoffFile>(handoffFile(root));
+    const seq = (current?.seq ?? 0) + 1;
+    await writeJson(handoffFile(root), {
+      seq,
+      action,
+      sendSeq: action === "send" ? seq : sendSeqOf(current),
+      at: new Date().toISOString(),
+    } satisfies HandoffFile);
+  });
+  handoffChain = next.catch(() => {});
+  return next;
+}
+
+/**
+ * Push agent status changes to the browser. Polled rather than watched: an
+ * agent process dying (session closed, task stopped) touches no file.
+ */
+export function watchAgent(root: string, hub: EventHub, intervalMs = 1000): () => void {
+  let last = "";
+  let busy = false;
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const status = await agentStatus(root);
+      const key = JSON.stringify(status);
+      if (key !== last) {
+        last = key;
+        hub.broadcast({ type: "agent:changed", status });
+      }
+    } finally {
+      busy = false;
+    }
+  };
+  void tick();
+  const timer = setInterval(() => void tick(), intervalMs);
+  return () => clearInterval(timer);
+}
+
+let activeOwner: string | undefined;
+
+export type WaitResult =
+  | { kind: "sent"; open: number; replies: number }
+  | { kind: "done" }
+  | { kind: "timeout" }
+  | { kind: "superseded" };
+
+/**
+ * `redline wait`: block until the author sends a review from the browser.
+ * Needs no daemon — it polls handoff.json directly.
+ *
+ * A first wait (`resume` false) follows a full pass, so every earlier click
+ * is moot: an old Done mustn't end the new loop, an old Send mustn't start a
+ * round the author never asked this session for. A re-arm (`resume` true)
+ * runs a queued round, then honours a Done clicked mid-pass.
+ */
+export async function runWait(
+  root: string,
+  opts: { timeoutMs: number; resume?: boolean; pollMs?: number; heartbeatMs?: number },
+): Promise<WaitResult> {
+  const pollMs = opts.pollMs ?? 500;
+  const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
+  let consumed = (await readJson<AgentFile>(agentFile(root)))?.consumed ?? 0;
+  if (!opts.resume) consumed = Math.max(consumed, (await readJson<HandoffFile>(handoffFile(root)))?.seq ?? 0);
+
+  const owner = (activeOwner = randomUUID());
+  const write = (state: AgentFile["state"], pid: number | null) =>
+    writeJson(agentFile(root), {
+      state,
+      pid,
+      owner,
+      consumed,
+      at: new Date().toISOString(),
+    } satisfies AgentFile);
+  // a second `redline wait` took over (the agent re-armed twice): only one
+  // listener may wake per send, and a stale one must not overwrite its state
+  const superseded = async () => (await readJson<AgentFile>(agentFile(root)))?.owner !== owner;
+  await write("listening", process.pid);
+  let lastBeat = Date.now();
+
+  const deadline = Date.now() + opts.timeoutMs;
+  for (;;) {
+    if (await superseded()) return { kind: "superseded" };
+
+    const handoff = await readJson<HandoffFile>(handoffFile(root));
+    if (sendSeqOf(handoff) > consumed) {
+      consumed = sendSeqOf(handoff);
+      const comments = await listOpenComments(new DocStore(root));
+      if (await superseded()) return { kind: "superseded" };
+      if (comments.length > 0) {
+        await write("working", process.pid);
+        return {
+          kind: "sent",
+          open: comments.length,
+          // the author answered a proposal: the last word in the thread is theirs
+          replies: comments.filter((c) => c.thread.at(-1)?.by === "author").length,
+        };
+      }
+      // nothing left to do (the last pass already covered it): don't spend
+      // an agent turn — record it and keep listening
+      await write("listening", process.pid);
+      lastBeat = Date.now();
+    } else if (handoff?.action === "done" && handoff.seq > consumed) {
+      if (await superseded()) return { kind: "superseded" };
+      consumed = handoff.seq;
+      await write("finished", null);
+      return { kind: "done" };
+    }
+
+    if (Date.now() >= deadline) {
+      if (await superseded()) return { kind: "superseded" };
+      await write("absent", null);
+      return { kind: "timeout" };
+    }
+    if (Date.now() - lastBeat >= heartbeatMs) {
+      if (await superseded()) return { kind: "superseded" };
+      await write("listening", process.pid);
+      lastBeat = Date.now();
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+/**
+ * `redline wait --stop`: the agent is leaving the loop (the user moved on).
+ * Clears a "working" header, and ends any wait still listening.
+ */
+export async function stopListening(root: string): Promise<void> {
+  const agent = await readJson<AgentFile>(agentFile(root));
+  await writeJson(agentFile(root), {
+    state: agent?.state === "finished" ? "finished" : "absent", // keep "review finished"
+    pid: null,
+    consumed: agent?.consumed ?? 0,
+    at: new Date().toISOString(),
+  } satisfies AgentFile);
+}
+
+/** Stop advertising "listening" when the wait is killed (task stopped, session closed). */
+export async function releaseWait(root: string): Promise<void> {
+  const agent = await readJson<AgentFile>(agentFile(root));
+  if (agent?.state === "listening" && agent.owner === activeOwner) {
+    await writeJson(agentFile(root), { ...agent, state: "absent", pid: null });
+  }
+}
+
+/** POSIX-shell-quote an argument only when it needs it. */
+const shellArg = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The exact command the agent runs to keep listening. The folder is absolute:
+ * a background task's `cd` doesn't carry over to the agent's next command.
+ */
+export function rearmCommand(root: string, timeoutArg?: string): string {
+  return [
+    "redline wait",
+    shellArg(root),
+    "--resume",
+    ...(timeoutArg !== undefined ? ["--timeout", shellArg(timeoutArg)] : []),
+  ].join(" ");
+}
+
+/** The line `redline wait` prints for the agent; `rearm` is the exact command to re-run. */
+export function describeWait(result: WaitResult, rearm: string): string {
+  switch (result.kind) {
+    case "sent": {
+      const s = result.open === 1 ? "" : "s";
+      const replies = result.replies ? ` (${result.replies} answering your proposals)` : "";
+      return (
+        `redline: review sent — ${result.open} open comment${s}${replies}. ` +
+        `Address them (list_comments → edit → resolve_comment), then run \`${rearm}\` to keep listening.`
+      );
+    }
+    case "done":
+      return "redline: review finished — stop listening.";
+    case "timeout":
+      return `redline: still waiting — run \`${rearm}\` to keep listening.`;
+    case "superseded":
+      return "redline: this wait was replaced or stopped — nothing to do.";
+  }
+}

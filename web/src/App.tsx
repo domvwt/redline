@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { makeQuoteSelector, PROJECT_PATH } from "@redline/shared";
-import type { Annotation, Sidecar, TreeEntry } from "@redline/shared";
+import type { AgentStatus, Annotation, Sidecar, TreeEntry } from "@redline/shared";
 import { api, ApiError, STATIC_MODE, subscribeEvents, type SearchResult } from "./api.ts";
+import { AgentControls } from "./components/AgentControls.tsx";
 import { CommentPopover } from "./components/CommentPopover.tsx";
 import { CommentSidebar } from "./components/CommentSidebar.tsx";
 import { DiffView } from "./components/DiffView.tsx";
@@ -32,6 +33,7 @@ export function App() {
   const [initialMarkdown, setInitialMarkdown] = useState<string>("");
   const [sidecar, setSidecar] = useState<Sidecar | null>(null);
   const [projectAnnotations, setProjectAnnotations] = useState<Annotation[]>([]);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [mode, setMode] = useState<Mode>("review");
@@ -265,9 +267,21 @@ export function App() {
         })
         .catch(() => showError(`${p} is no longer readable — was it deleted?`));
     };
+    // a fetch that resolves after a pushed status is older than it
+    let pushed = false;
+    const refreshAgent = () => {
+      pushed = false;
+      api.agentStatus?.().then((status) => {
+        if (!pushed) setAgentStatus(status);
+      }, () => {});
+    };
+    refreshAgent();
     const unsubscribe = subscribeEvents({
       onEvent: (event) => {
-        if (event.type === "comments:changed") {
+        if (event.type === "agent:changed") {
+          pushed = true;
+          setAgentStatus(event.status);
+        } else if (event.type === "comments:changed") {
           refreshTree();
           if (event.path === PROJECT_PATH) refreshProjectNotes();
           else if (event.path === pathRef.current) void refreshComments(event.path);
@@ -281,6 +295,7 @@ export function App() {
       // events are lost while the connection is down (daemon restart, laptop
       // sleep) — resync everything on reconnect
       onReconnect: () => {
+        refreshAgent();
         refreshTree();
         refreshProjectNotes();
         resyncCurrentDoc();
@@ -645,7 +660,7 @@ export function App() {
   };
 
   // no counts in chrome — the tree badges and section headers already carry
-  // them; the handoff verbs live in the header's top-right slot (web build)
+  // them; the handoff verbs live in the header's top-right slot (both builds)
   const agentReady =
     tree.reduce((n, e) => n + e.agentReady, 0) +
     projectAnnotations.filter((a) => a.status === "open" || a.status === "orphaned").length;
@@ -695,6 +710,9 @@ export function App() {
                       ? "● changes"
                       : `● ${changeCount || "formatting"} change${changeCount === 1 ? "" : "s"}`}
                   </button>
+                )}
+                {!STATIC_MODE && (
+                  <AgentControls status={agentStatus} readyCount={agentReady} onNotice={showError} />
                 )}
                 {STATIC_MODE && (
                   <Suspense fallback={null}>
@@ -820,6 +838,12 @@ export function App() {
           <div className="rl-welcome">
             <h2>redline</h2>
             <p>Pick a document on the left, highlight prose, and leave comments.</p>
+            {!STATIC_MODE && (
+              // project notes need no open document — the agent link is here too
+              <div className="rl-welcome-agent">
+                <AgentControls status={agentStatus} readyCount={agentReady} onNotice={showError} />
+              </div>
+            )}
             {STATIC_MODE ? (
               <p className="rl-welcome-hint">
                 Drop a markdown file anywhere in this window, or paste markdown straight from

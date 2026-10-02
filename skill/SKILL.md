@@ -53,3 +53,36 @@ way a thoughtful human editor would respond to margin comments.
 
 If the user has the redline daemon running, their browser updates live as
 you edit and resolve — no need to tell them to refresh.
+
+## Keep listening for the next round
+
+After the summary, if you can run background commands (Claude Code's Bash
+`run_in_background`), keep listening so the author can hand you the next
+round from the browser. Skip this if a `redline wait` you started is still
+running in the background — it's already listening.
+
+- **First wait** (after this skill's first pass): run
+  `redline wait <folder>` as a background task with `timeout: 7200000`,
+  where `<folder>` is the one redline serves (it holds `.redline/`) — pass
+  it rather than `cd`-ing there. Then end your turn.
+- **Every later wait**: run the exact command the last line printed (it
+  includes `--resume`), the same way. If the task hit its timeout without
+  printing anything, use `redline wait <folder> --resume`.
+
+The author keeps reviewing; the browser header shows *agent listening*, and
+their **send to agent** click ends the command and wakes you. Act on the
+line it prints:
+
+- `review sent` — run steps 1–5 again (replies to your proposals show up in
+  `list_comments` threads), then re-arm.
+- `still waiting`, or a timeout — re-arm silently; don't message the user.
+- `this wait was replaced or stopped` — do nothing.
+- `review finished` — stop listening.
+- `no .redline/ in …` — wrong folder; rerun the first wait in the right one.
+
+Don't re-arm if the user has moved on to other work with you in the
+terminal: run `redline wait <folder> --stop` (not in the background) so the
+browser stops showing you as working, and say so in one line.
+
+Without background commands, do a single pass as above; the user will ask
+again for the next round.

@@ -61,6 +61,15 @@ export const api: RedlineApi = {
     fetch(`/api/comments/${id}?path=${encodeURIComponent(path)}`, { method: "DELETE" }).then((r) =>
       json(r),
     ),
+
+  agentStatus: () => fetch("/api/agent").then((r) => json(r)),
+
+  sendHandoff: (action) =>
+    fetch("/api/handoff", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    }).then((r) => json(r)),
 };
 
 export const subscribeEvents: SubscribeEvents = (handlers) => {

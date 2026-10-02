@@ -1,4 +1,4 @@
-import type { Annotation, ServerEvent, Sidecar, TreeEntry } from "@redline/shared";
+import type { AgentStatus, Annotation, ServerEvent, Sidecar, TreeEntry } from "@redline/shared";
 
 export class ApiError extends Error {
   constructor(
@@ -57,6 +57,10 @@ export interface RedlineApi {
   deleteComment(id: string, path: string): Promise<{ ok: true }>;
   /** browser store only: remove a document, its comments, and its baseline */
   deleteDoc?(path: string): Promise<{ ok: true }>;
+  /** daemon only: is an agent waiting in `redline wait`? */
+  agentStatus?(): Promise<AgentStatus>;
+  /** daemon only: wake the waiting agent for a round (send), or end its loop (done) */
+  sendHandoff?(action: "send" | "done"): Promise<AgentStatus>;
 }
 
 export type SubscribeEvents = (handlers: {

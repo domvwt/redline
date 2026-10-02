@@ -2,8 +2,16 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+  describeWait,
+  rearmCommand,
+  releaseWait,
+  runWait,
+  stopListening,
+  watchAgent,
+} from "./agent-link.ts";
 import { DocStore } from "./docs.ts";
 import { EventHub } from "./events.ts";
 import { runStdioMcp } from "./mcp.ts";
@@ -23,6 +31,55 @@ if (args[0] === "mcp") {
     process.exit(1);
   }
   await runStdioMcp(mcpRoot);
+} else if (args[0] === "wait") {
+  // `redline wait [docs-dir] [--resume] [--timeout <min>]` — block until the
+  // author clicks "send to agent" in the browser, print what to do, exit.
+  // Agents run it as a background task so the session wakes each round.
+  // `--stop` instead tells the browser the agent has left the loop.
+  const usage = "usage: redline wait [docs-dir] [--resume] [--timeout <minutes>] | redline wait [docs-dir] --stop";
+  let rootArg: string | undefined;
+  let resume = false;
+  let stop = false;
+  let timeoutArg: string | undefined;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--timeout") timeoutArg = args[++i] ?? ""; // a missing value fails validation below
+    else if (args[i] === "--resume") resume = true;
+    else if (args[i] === "--stop") stop = true;
+    else if (!args[i].startsWith("-") && rootArg === undefined) rootArg = args[i];
+    else {
+      console.error(`unexpected argument: ${args[i]}\n${usage}`);
+      process.exit(1);
+    }
+  }
+  const timeoutMin = timeoutArg === undefined ? 110 : Number(timeoutArg); // 110: under Claude Code's 2h background-task ceiling
+  if (!(timeoutMin > 0 && Number.isFinite(timeoutMin))) {
+    console.error(`invalid --timeout value\n${usage}`);
+    process.exit(1);
+  }
+  const waitRoot = path.resolve(rootArg ?? ".");
+  // without this, a wait in the wrong folder listens forever while the
+  // browser reports no agent
+  if (!statSync(path.join(waitRoot, ".redline"), { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(
+      `no .redline/ in ${waitRoot} — run redline wait in the folder redline serves, or pass it: redline wait <docs-dir>`,
+    );
+    process.exit(1);
+  }
+  if (stop && (resume || timeoutArg !== undefined)) {
+    console.error(`--stop takes no other options\n${usage}`);
+    process.exit(1);
+  }
+  if (stop) {
+    await stopListening(waitRoot);
+    console.log("redline: stopped listening.");
+    process.exit(0);
+  }
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => void releaseWait(waitRoot).finally(() => process.exit(0)));
+  }
+  const result = await runWait(waitRoot, { timeoutMs: timeoutMin * 60_000, resume });
+  console.log(describeWait(result, rearmCommand(waitRoot, timeoutArg)));
+  process.exit(0);
 } else {
   let rootArg: string | undefined;
   let port = 5175;
@@ -36,7 +93,7 @@ if (args[0] === "mcp") {
       rootArg = args[i];
     } else {
       console.error(
-        `unknown option: ${args[i]}\nusage: redline [docs-dir] [--port <n>] [--no-open] | redline mcp [docs-dir]`,
+        `unknown option: ${args[i]}\nusage: redline [docs-dir] [--port <n>] [--no-open] | redline mcp [docs-dir] | redline wait [docs-dir] [--resume] [--timeout <min>] [--stop]`,
       );
       process.exit(1);
     }
@@ -56,6 +113,7 @@ if (args[0] === "mcp") {
   const hub = new EventHub();
   const app = buildApp(docs, hub);
   startWatcher(docs, hub);
+  watchAgent(root, hub);
 
   // Serve the built web UI when available (production mode).
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
@@ -66,6 +124,10 @@ if (args[0] === "mcp") {
   }
 
   await ensureGitignore(root);
+  // `redline wait` checks for this to know it's in the folder redline serves
+  await fs.mkdir(path.join(root, ".redline"), { recursive: true }).catch((err: Error) => {
+    console.warn(`can't create ${path.join(root, ".redline")} (${err.message}) — comments won't save here`);
+  });
 
   const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, (info) => {
     const url = `http://127.0.0.1:${info.port}`;

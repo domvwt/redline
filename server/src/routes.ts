@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -12,6 +12,7 @@ import {
   PatchError,
   PROJECT_PATH,
 } from "@redline/shared";
+import { agentStatus, sendHandoff } from "./agent-link.ts";
 import { reanchorAnnotation, reanchorFile } from "./anchoring.ts";
 import { addAuthorReply, NotFoundError } from "./comments-service.ts";
 import { DocStore, hashOf, PathError } from "./docs.ts";
@@ -77,6 +78,19 @@ const IMAGE_MIME: Record<string, string> = {
   ".avif": "image/avif",
 };
 
+class BadBodyError extends Error {}
+
+/** The request's JSON body; malformed JSON is the client's fault, not a 500. */
+async function jsonBody(c: Context): Promise<unknown> {
+  try {
+    return await c.req.json();
+  } catch {
+    throw new BadBodyError("malformed JSON body");
+  }
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
 export function buildApp(docs: DocStore, hub: EventHub): Hono {
   const app = new Hono();
 
@@ -84,9 +98,26 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   // but a hostile page whose DNS rebinds to 127.0.0.1 would be same-origin
   // with every route. The request URL's host comes from the Host header.
   app.use("*", async (c, next) => {
-    const host = new URL(c.req.url).hostname;
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") {
+    if (!LOOPBACK.has(new URL(c.req.url).hostname)) {
       return c.json({ error: "forbidden host" }, 403);
+    }
+    // CSRF guard: any page the user visits can POST here (a text/plain body
+    // skips the CORS preflight) — and a Send wakes an agent that edits files
+    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+      const origin = c.req.header("origin");
+      let crossOrigin: boolean;
+      if (origin !== undefined) {
+        // exact host:port — other local web servers aren't trusted either. The
+        // vite dev proxy keeps Origin and Host equal (changeOrigin: false)
+        try {
+          crossOrigin = new URL(origin).host !== new URL(c.req.url).host;
+        } catch {
+          crossOrigin = true; // "null" (sandboxed iframe, file://) or garbage
+        }
+      } else {
+        crossOrigin = c.req.header("sec-fetch-site") === "cross-site";
+      }
+      if (crossOrigin) return c.json({ error: "cross-origin request refused" }, 403);
     }
     return next();
   });
@@ -99,6 +130,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
     if (err instanceof PathError) return c.json({ error: err.message }, 400);
     if (err instanceof z.ZodError) return c.json({ error: err.message }, 400);
+    if (err instanceof BadBodyError) return c.json({ error: err.message }, 400);
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return c.json({ error: "not found" }, 404);
     }
@@ -130,7 +162,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   });
 
   app.post("/api/reviewed", async (c) => {
-    const { path: relPath } = z.object({ path: z.string().min(1) }).parse(await c.req.json());
+    const { path: relPath } = z.object({ path: z.string().min(1) }).parse(await jsonBody(c));
     const { markdown } = await docs.read(relPath);
     await saveBaseline(docs.root, relPath, markdown);
     return c.json({ ok: true });
@@ -165,7 +197,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   });
 
   app.put("/api/doc", async (c) => {
-    const body = putDocSchema.parse(await c.req.json());
+    const body = putDocSchema.parse(await jsonBody(c));
     const { hash: currentHash } = await docs.read(body.path);
     if (currentHash !== body.baseHash) {
       return c.json({ error: "document changed on disk; reload before saving" }, 409);
@@ -185,7 +217,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   // Import a document dropped or pasted into the UI. Never overwrites:
   // name collisions get a numeric suffix.
   app.post("/api/import", async (c) => {
-    const body = importDocSchema.parse(await c.req.json());
+    const body = importDocSchema.parse(await jsonBody(c));
     const base = path
       .basename(body.name)
       .replace(/\.(md|markdown|txt)$/i, "")
@@ -235,7 +267,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
   });
 
   app.post("/api/comments", async (c) => {
-    const body = createCommentSchema.parse(await c.req.json());
+    const body = createCommentSchema.parse(await jsonBody(c));
     const relPath = guardPath(body.path);
     if (relPath === PROJECT_PATH && body.selector) {
       return c.json({ error: "project notes cannot be anchored" }, 400);
@@ -266,7 +298,7 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
 
   app.patch("/api/comments/:id", async (c) => {
     const id = c.req.param("id");
-    const body = patchCommentSchema.parse(await c.req.json());
+    const body = patchCommentSchema.parse(await jsonBody(c));
     const relPath = guardPath(body.path);
     if (body.reply) {
       const annotation = await addAuthorReply(docs, hub, {
@@ -313,6 +345,16 @@ export function buildApp(docs: DocStore, hub: EventHub): Hono {
       hub.broadcast({ type: "comments:changed", path: relPath });
       return c.json({ ok: true });
     });
+  });
+
+  app.get("/api/agent", async (c) => c.json(await agentStatus(docs.root)));
+
+  app.post("/api/handoff", async (c) => {
+    const { action } = z.object({ action: z.enum(["send", "done"]) }).parse(await jsonBody(c));
+    await sendHandoff(docs.root, action);
+    const status = await agentStatus(docs.root);
+    hub.broadcast({ type: "agent:changed", status });
+    return c.json(status);
   });
 
   app.get("/api/events", (c) =>

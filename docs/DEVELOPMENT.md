@@ -53,6 +53,27 @@ assistants fit via the sidebar's copy-for-chat export.
 - **MCP**: `redline mcp [dir]` is a stdio server spawned on demand by the
   agent's MCP client. It reads and writes the same sidecar files as the
   daemon, which notices via its watcher — the two never talk directly.
+- **Agent link**: the browser's *send to agent* reaches the agent through
+  two files in `.redline/`. Only the daemon writes `handoff.json`
+  (`{seq, action, sendSeq, at}`: `seq` bumps on every Send/Done click,
+  `sendSeq` is the latest Send's, so a Done can't swallow a queued round);
+  only `redline wait` writes `agent.json` (`{state, pid, owner, consumed,
+  at}`: `owner` is per-wait, so a newer wait supersedes an older one; `at`
+  is a heartbeat while listening). A wait wakes when
+  `sendSeq > consumed` and there's something open; a re-arm (`--resume`)
+  also ends on a pending Done, while a first wait treats every earlier
+  click, Send or Done, as moot. The daemon polls both files each second, so a dead or silent
+  listener reads as *absent*, and pushes `agent:changed` over SSE
+  (`server/src/agent-link.ts`). *working* has no liveness signal (the wait
+  has exited and handed over to the agent): an agent leaving the loop runs
+  `redline wait --stop`, a Done clears it at once, and otherwise it expires
+  after 2 hours. A wait that ends the loop on Done writes `finished`, so the
+  header can tell "review finished" from "no agent".
+- **Write guard**: a Send wakes an agent that edits files, so the daemon
+  refuses non-GET requests from any other origin (Origin must match the
+  request's host:port exactly; with no Origin, a `Sec-Fetch-Site:
+  cross-site` is refused) — plain browser form posts would otherwise reach
+  it from any page.
 
 ## Working on redline
 

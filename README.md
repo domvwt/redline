@@ -171,6 +171,34 @@ edit is made, but the comment stays yours to close. `accept` each proposal
 
 <img src="docs/assets/screenshot-review.png" alt="The review UI: a rendered document with highlighted passages on the left, and comment cards on the right — one carrying an agent proposal marked awaiting your review">
 
+### The next round, from the browser
+
+You only need the terminal for the first round. When the agent finishes a
+pass, the skill has it run `redline wait` in the background: the agent's turn
+ends, your terminal stays free, and the browser header shows
+**● agent listening**. Review the proposals, `accept` or `reply`, leave new
+comments, then click **send to agent**. The agent wakes in the same session,
+with everything you've worked on together still in context, and takes the
+next round. The header reads *agent working…* until it's listening again.
+Click **done** when the review is finished: the header reads *review
+finished*, and the agent stops listening once its current pass ends.
+
+If you click send while the agent is still working, the round is queued and
+picked up as soon as the current pass ends — even if you click done after
+it, the queued round runs first.
+
+Agents that can't run background commands do one pass per request, as before.
+Any agent can use the same loop by running `redline wait [docs-dir]` itself
+(in the folder redline serves): the command blocks until you click send,
+prints what to do — including the `--resume` command to listen again — and
+exits. An agent leaving the loop runs `redline wait [docs-dir] --stop`, so the
+header doesn't keep showing it as working.
+
+Tool permission prompts still appear only in the terminal. To keep the loop
+in the browser, allow redline's tools once (`mcp__redline__*` and
+`Bash(redline wait *)`), and let the agent edit files without asking, e.g. with
+Claude Code's accept-edits mode.
+
 ### Comment lifecycle
 
 | Status                   | Meaning                                                                                                                                                                                                        |

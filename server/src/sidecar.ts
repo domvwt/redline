@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -57,10 +58,16 @@ function sidecarPath(root: string, relPath: string): string {
 
 /** Atomic write: temp file + rename, so external readers never see a torn file. */
 export async function atomicWrite(file: string, content: string): Promise<void> {
-  const tmp = file + ".tmp-" + process.pid;
-  await fs.writeFile(tmp, content, "utf8");
-  markOwnWrite(file);
-  await fs.rename(tmp, file);
+  // unique per write: one process can have two writes to a file in flight
+  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await fs.writeFile(tmp, content, "utf8");
+    markOwnWrite(file);
+    await fs.rename(tmp, file);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }); // unique names would otherwise pile up
+    throw err;
+  }
 }
 
 /**

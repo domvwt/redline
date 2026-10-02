@@ -1013,4 +1013,23 @@ pre code,
 
 
 .rl-header .rl-action { font-size: 12px; }
+
+/* ---------- agent link (daemon build) ---------- */
+.rl-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rl-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.rl-agent-listening { color: var(--green); }
+.rl-agent-working { color: var(--amber-note); }
+.rl-agent-working .rl-agent-dot { animation: rl-agent-pulse 1.2s ease-in-out infinite; }
+.rl-welcome-agent { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 12px 0; }
+@keyframes rl-agent-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .rl-agent-working .rl-agent-dot { animation: none; }
+}
 .rl-mode button:disabled { opacity: 0.4; cursor: default; }

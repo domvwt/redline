@@ -790,3 +790,37 @@ describe("review-pass regressions", () => {
     expect((json as Array<{ openComments: number }>)[0].openComments).toBe(1);
   });
 });
+
+describe("cross-origin guard", () => {
+  const post = (headers: Record<string, string>) =>
+    app.request("http://127.0.0.1:5175/api/handoff", {
+      method: "POST",
+      headers: { "content-type": "text/plain", ...headers },
+      body: JSON.stringify({ action: "send" }),
+    });
+
+  it("refuses writes from another site", async () => {
+    expect((await post({ origin: "https://evil.example" })).status).toBe(403);
+    expect((await post({ "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await post({ origin: "null" })).status).toBe(403);
+    // another local web server is a different site too
+    expect((await post({ origin: "http://127.0.0.1:8000" })).status).toBe(403);
+  });
+
+  it("allows the review UI, the vite dev server, and non-browser clients", async () => {
+    expect((await post({ origin: "http://127.0.0.1:5175", "sec-fetch-site": "same-origin" })).status).toBe(200);
+    // via the vite dev proxy: Host and Origin are both the dev server's
+    const proxied = await app.request("http://localhost:5174/api/handoff", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost:5174" },
+      body: JSON.stringify({ action: "send" }),
+    });
+    expect(proxied.status).toBe(200);
+    expect((await post({})).status).toBe(200);
+  });
+
+  it("leaves reads alone", async () => {
+    const res = await app.request("http://127.0.0.1:5175/api/tree", { headers: { origin: "https://evil.example" } });
+    expect(res.status).toBe(200);
+  });
+});
