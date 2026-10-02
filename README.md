@@ -175,24 +175,33 @@ edit is made, but the comment stays yours to close. `accept` each proposal
 
 You only need the terminal for the first round. When the agent finishes a
 pass, the skill has it run `redline wait` in the background: the agent's turn
-ends, your terminal stays free, and the browser header shows
-**● agent listening**. Review the proposals, `accept` or `reply`, leave new
-comments, then click **send to agent**. The agent wakes in the same session,
-with everything you've worked on together still in context, and takes the
-next round. The header reads *agent working…* until it's listening again.
-Click **done** when the review is finished: the header reads *review
-finished*, and the agent stops listening once its current pass ends.
+ends, your terminal stays free, and the bar under the document shows
+**● Listening**. Review the proposals, `accept` or `reply`, leave new
+comments, then click **Send to agent** (or press ⌘↵ / Ctrl ↵). The agent wakes
+in the same session, with everything you've worked on together still in
+context, and takes the next round. While it works, the bar counts the
+comments it has answered, and the cards it still holds are marked *with
+agent*. When you're finished with it, **Done for now** in the bar's ⋯ menu
+lets the agent stop listening: the bar reads *Stopping* until its current
+pass ends, then *Agent stopped* (dismiss it, or start a new session). If the
+agent's session ended mid-pass, **Stop waiting** in the same menu clears
+*Stopping* (it counts from 10 seconds after Done for now).
+Your comments and proposals stay as they are. **Collapse bar**, in the same
+menu, shrinks it to a dot until you open it again.
 
-If you click send while the agent is still working, the round is queued and
-picked up as soon as the current pass ends — even if you click done after
-it, the queued round runs first.
+If you leave comments while the agent is still working, or reply to a
+proposal it has just made, **Queue** hands them over as the next round —
+their cards read *next round* — picked up as soon as the current pass ends.
+Even if you click Done for now after it, the queued round runs first. With no
+agent connected, the bar's button copies `/redline-comments` for you to
+start one.
 
 Agents that can't run background commands do one pass per request, as before.
 Any agent can use the same loop by running `redline wait [docs-dir]` itself
 (in the folder redline serves): the command blocks until you click send,
 prints what to do — including the `--resume` command to listen again — and
 exits. An agent leaving the loop runs `redline wait [docs-dir] --stop`, so the
-header doesn't keep showing it as working.
+bar doesn't keep showing it as working.
 
 Tool permission prompts still appear only in the terminal. To keep the loop
 in the browser, allow redline's tools once (`mcp__redline__*` and

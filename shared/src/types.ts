@@ -95,8 +95,17 @@ export interface AgentStatus {
   state: AgentState;
   /** the author sent a review the agent hasn't picked up yet */
   pending: boolean;
-  /** the last action was Done and no agent is listening or working */
+  /** the author clicked Done mid-pass: the agent stops once it's through */
+  stopping: boolean;
+  /** a Done ended the agent's loop and nothing is listening or working */
   finished: boolean;
+  /** while working: progress through the round it was handed; `held` are the
+   *  ids it hasn't answered yet (a proposal reopened since counts as answered) */
+  round: { total: number; answered: number; held: string[] } | null;
+  /** rounds the agent's session has run, its first full pass included */
+  rounds: number;
+  /** the agent session these figures belong to (null before any) */
+  session: string | null;
 }
 
 export type ServerEvent =

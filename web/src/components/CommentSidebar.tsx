@@ -26,6 +26,8 @@ interface Props extends CommentActions {
   commentsWithChanges: Set<string> | null;
   /** each comment's live text in the document, which a card's "now" reads */
   liveQuotes: Map<string, string>;
+  /** open comments the working agent holds, or that wait for its next round */
+  roundMarks: Map<string, "with-agent" | "queued">;
   onAddNote(scope: "document" | "project", text: string): void;
 }
 
@@ -243,11 +245,13 @@ function CommentCard({
   focused,
   changeDrawn,
   liveQuote,
+  roundMark,
   actions,
 }: {
   annotation: Annotation;
   isProject: boolean;
   focused: boolean;
+  roundMark?: "with-agent" | "queued";
   /** the document shows this comment's change itself */
   changeDrawn: boolean;
   liveQuote?: string;
@@ -298,6 +302,18 @@ function CommentCard({
       )}
       {annotation.status === "resolved" && !annotation.resolution?.note && (
         <span className="rl-resolved-mark">✓ resolved</span>
+      )}
+      {roundMark && (
+        <span
+          className={`rl-round-mark rl-round-${roundMark}`}
+          title={
+            roundMark === "with-agent"
+              ? "Sent this round — the agent hasn't answered it yet"
+              : "Sent while the agent was busy — it's in the next round"
+          }
+        >
+          {roundMark === "with-agent" ? "with agent" : "next round"}
+        </span>
       )}
       {shortQuote && (
         <blockquote>
@@ -538,6 +554,7 @@ export function CommentSidebar({
   focusTick,
   commentsWithChanges,
   liveQuotes,
+  roundMarks,
   onAddNote,
   ...actions
 }: Props) {
@@ -588,6 +605,7 @@ export function CommentSidebar({
         focused={a.id === focusedId}
         changeDrawn={commentsWithChanges?.has(a.id) ?? true}
         liveQuote={liveQuotes.get(a.id)}
+        roundMark={roundMarks.get(a.id)}
         actions={actions}
       />
     ));

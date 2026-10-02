@@ -254,6 +254,7 @@ body {
 .rl-editor {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable; /* the agent bar reserves the same, so they stay aligned */
   padding: 40px 48px 140px;
 }
 .rl-editor .milkdown { max-width: 680px; margin: 0 auto; }
@@ -373,7 +374,8 @@ body {
 /* text statuses sit on the card's first line, tucked right — like the dot,
    they never interrupt the content flow */
 .rl-card .rl-orphan-mark,
-.rl-card .rl-resolved-mark {
+.rl-card .rl-resolved-mark,
+.rl-card .rl-round-mark {
   float: right;
   margin: 0 0 4px 8px;
 }
@@ -811,7 +813,7 @@ body {
   cursor: pointer;
 }
 .rl-diff-bar .rl-primary { background: var(--text); color: #fff; border-color: var(--text); }
-.rl-diff-body { flex: 1; overflow-y: auto; padding: 20px 32px 80px; }
+.rl-diff-body { flex: 1; overflow-y: auto; padding: 20px 32px 96px; }
 .rl-diff-body pre {
   margin: 0;
   font-family: var(--mono);
@@ -1014,22 +1016,197 @@ pre code,
 
 .rl-header .rl-action { font-size: 12px; }
 
-/* ---------- agent link (daemon build) ---------- */
-.rl-agent {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
+/* ---------- agent bar (daemon build) ---------- */
+/* zero-height anchor at the foot of the main column: the bar floats above
+   it, over the editor's bottom padding, without repositioning anything */
+.rl-agent-dock { position: relative; height: 0; flex-shrink: 0; z-index: 20; }
+/* mirrors the editor's text column — same side padding, same reserved
+   scrollbar gutter, same max width — so the bar lines up with the prose.
+   Tall enough for the menu above the bar; clicks fall through it. */
+.rl-agent-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 320px;
+  box-sizing: border-box;
+  padding: 0 48px 20px;
+  overflow: hidden;
+  scrollbar-gutter: stable;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+  container-type: inline-size;
 }
-.rl-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.rl-agent-listening { color: var(--green); }
-.rl-agent-working { color: var(--amber-note); }
-.rl-agent-working .rl-agent-dot { animation: rl-agent-pulse 1.2s ease-in-out infinite; }
-.rl-welcome-agent { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 12px 0; }
-@keyframes rl-agent-pulse { 50% { opacity: 0.25; } }
+.rl-agent-bar,
+.rl-agent-pill {
+  pointer-events: auto;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(35, 33, 29, 0.13), 0 1px 2px rgba(35, 33, 29, 0.08);
+  font-size: 13px;
+  white-space: nowrap;
+}
+/* one footprint in every state: only the slots' contents change */
+.rl-agent-bar {
+  width: 100%;
+  max-width: 680px;
+  height: 52px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto 1px minmax(0, 1fr) 164px 30px;
+  align-items: center;
+  column-gap: 12px;
+  padding: 0 8px 0 16px;
+  border-radius: 12px;
+}
+.rl-agent-sep { width: 1px; height: 20px; background: var(--border); }
+.rl-agent-status { display: flex; align-items: center; gap: 8px; font-weight: 600; overflow: hidden; }
+.rl-agent-label { overflow: hidden; text-overflow: ellipsis; }
+.rl-agent-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; box-sizing: border-box; }
+.rl-agent-listening .rl-agent-dot { background: var(--green); box-shadow: 0 0 0 3px rgba(51, 114, 77, 0.18); }
+.rl-agent-working .rl-agent-dot {
+  background: var(--amber-note);
+  box-shadow: 0 0 0 3px rgba(160, 106, 18, 0.18);
+  animation: rl-agent-pulse 1.4s ease-in-out infinite;
+}
+.rl-agent-absent .rl-agent-dot { border: 1.5px solid #b8b2a6; }
+.rl-agent-absent .rl-agent-status { color: var(--muted); }
+.rl-agent-stranded .rl-agent-dot { border: 1.5px solid var(--del-line); }
+.rl-agent-stranded .rl-agent-status { color: var(--del-text); }
+.rl-agent-check { color: var(--green); font-weight: 700; }
+.rl-agent-stopped .rl-agent-status { color: var(--green); }
+@keyframes rl-agent-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) {
   .rl-agent-working .rl-agent-dot { animation: none; }
 }
+.rl-agent-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.rl-agent-detail b { color: var(--text); font-weight: 600; }
+.rl-agent-detail > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.rl-agent-segments { display: flex; gap: 3px; flex-shrink: 0; }
+.rl-agent-segments span { width: 14px; height: 4px; border-radius: 2px; background: var(--border); }
+.rl-agent-segments span.done { background: var(--green); }
+.rl-agent-act {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rl-agent-act:disabled { cursor: default; }
+.rl-agent-act { overflow: hidden; white-space: nowrap; justify-content: safe center; }
+.rl-agent-act code {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.rl-agent-act kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.2);
+}
+.rl-agent-act-primary { background: var(--accent); color: #fff; }
+.rl-agent-act-sending { background: #c97a66; color: #fff; }
+.rl-agent-act-off { background: #ece9e2; color: #8f897e; }
+.rl-agent-act-outline { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+.rl-agent-act-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.rl-agent-act-outline:disabled { background: #ece9e2; border-color: transparent; color: #8f897e; }
+.rl-agent-act-quiet:disabled { color: var(--muted); }
+.rl-agent-more { position: relative; }
+.rl-agent-more-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.rl-agent-more-btn:hover,
+.rl-agent-more-btn.open { background: var(--panel); color: var(--text); }
+.rl-agent-menu {
+  position: absolute;
+  right: -8px;
+  bottom: calc(100% + 16px);
+  width: 260px;
+  padding: 5px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(35, 33, 29, 0.16), 0 1px 2px rgba(35, 33, 29, 0.08);
+  white-space: normal;
+}
+.rl-agent-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--text);
+  cursor: pointer;
+}
+.rl-agent-menu button:hover:not(:disabled) { background: var(--panel); }
+.rl-agent-menu button:disabled { opacity: 0.45; cursor: default; }
+.rl-agent-menu b { font-weight: 600; }
+.rl-agent-menu span { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.rl-agent-pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px 0 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.rl-agent-chevron { color: var(--muted); font-size: 11px; }
+/* after the base rules, which it overrides at equal specificity */
+@container (max-width: 440px) {
+  .rl-agent-bar { grid-template-columns: minmax(64px, 1fr) minmax(96px, 164px) 30px; }
+  .rl-agent-sep,
+  .rl-agent-detail { display: none; }
+}
+/* card marks while the agent works: which comments it holds, which wait */
+.rl-round-mark {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: help;
+}
+.rl-round-with-agent { color: var(--amber-note); }
+.rl-round-queued { color: var(--muted); }
 .rl-mode button:disabled { opacity: 0.4; cursor: default; }

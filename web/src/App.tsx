@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { makeQuoteSelector, PROJECT_PATH } from "@redline/shared";
 import type { AgentStatus, Annotation, Sidecar, TreeEntry } from "@redline/shared";
 import { api, ApiError, STATIC_MODE, subscribeEvents, type SearchResult } from "./api.ts";
-import { AgentControls } from "./components/AgentControls.tsx";
+import { AgentBar } from "./components/AgentBar.tsx";
 import { CommentPopover } from "./components/CommentPopover.tsx";
 import { CommentSidebar } from "./components/CommentSidebar.tsx";
 import { DiffView } from "./components/DiffView.tsx";
@@ -588,7 +588,7 @@ export function App() {
       if (e.target instanceof Element && e.target.closest("input, textarea, [contenteditable=true]")) return;
       // modified arrows extend selections; an open menu or dialog owns the keys
       if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
-      if (document.querySelector(".rl-menu, .rl-handoff-panel, .rl-popover")) return;
+      if (document.querySelector(".rl-menu, .rl-agent-menu, .rl-handoff-panel, .rl-popover")) return;
       if (e.key === "ArrowRight") (e.preventDefault(), focusStep(1));
       else if (e.key === "ArrowLeft") (e.preventDefault(), focusStep(-1));
       else if (e.key === "Escape") exitFocusMode();
@@ -659,11 +659,21 @@ export function App() {
     void flush.then(() => setView("diff"));
   };
 
-  // no counts in chrome — the tree badges and section headers already carry
-  // them; the handoff verbs live in the header's top-right slot (both builds)
+  // what a send hands over: the static build's header handoff and the
+  // daemon build's agent bar both count it
   const agentReady =
     tree.reduce((n, e) => n + e.agentReady, 0) +
     projectAnnotations.filter((a) => a.status === "open" || a.status === "orphaned").length;
+  // while the agent works, tell the cards it holds from those queued behind it
+  const roundMarks = new Map<string, "with-agent" | "queued">();
+  if (agentStatus?.state === "working" && Array.isArray(agentStatus.round?.held)) {
+    const held = new Set(agentStatus.round!.held);
+    for (const a of [...annotations, ...projectAnnotations]) {
+      if (a.status !== "open" && a.status !== "orphaned") continue;
+      if (held.has(a.id)) roundMarks.set(a.id, "with-agent");
+      else if (agentStatus.pending) roundMarks.set(a.id, "queued");
+    }
+  }
 
   return (
     <div className={`rl-app${focusMode ? " rl-focusing" : ""}${spotLit ? " rl-spotlit" : ""}`}>
@@ -710,9 +720,6 @@ export function App() {
                       ? "● changes"
                       : `● ${changeCount || "formatting"} change${changeCount === 1 ? "" : "s"}`}
                   </button>
-                )}
-                {!STATIC_MODE && (
-                  <AgentControls status={agentStatus} readyCount={agentReady} onNotice={showError} />
                 )}
                 {STATIC_MODE && (
                   <Suspense fallback={null}>
@@ -838,12 +845,6 @@ export function App() {
           <div className="rl-welcome">
             <h2>redline</h2>
             <p>Pick a document on the left, highlight prose, and leave comments.</p>
-            {!STATIC_MODE && (
-              // project notes need no open document — the agent link is here too
-              <div className="rl-welcome-agent">
-                <AgentControls status={agentStatus} readyCount={agentReady} onNotice={showError} />
-              </div>
-            )}
             {STATIC_MODE ? (
               <p className="rl-welcome-hint">
                 Drop a markdown file anywhere in this window, or paste markdown straight from
@@ -859,6 +860,7 @@ export function App() {
             )}
           </div>
         )}
+        {!STATIC_MODE && <AgentBar status={agentStatus} readyCount={agentReady} onNotice={showError} />}
       </main>
 
       <CommentSidebar
@@ -872,6 +874,7 @@ export function App() {
           baselineState === "loading" ? null : new Set(view === "editor" ? commentsWithChanges : [])
         }
         liveQuotes={live}
+        roundMarks={roundMarks}
         onAddNote={addNote}
         onFocus={onCardFocus}
         onDelete={(id, isProject) => {

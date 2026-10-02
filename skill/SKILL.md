@@ -69,8 +69,8 @@ running in the background — it's already listening.
   includes `--resume`), the same way. If the task hit its timeout without
   printing anything, use `redline wait <folder> --resume`.
 
-The author keeps reviewing; the browser header shows *agent listening*, and
-their **send to agent** click ends the command and wakes you. Act on the
+The author keeps reviewing; the bar under the document shows *Listening*,
+and their **Send to agent** click ends the command and wakes you. Act on the
 line it prints:
 
 - `review sent` — run steps 1–5 again (replies to your proposals show up in
